@@ -29,8 +29,23 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg); color: var(--text); overflow: hidden;
   }
-  #app { display: grid; grid-template-columns: 340px 1fr 1fr; grid-template-rows: 100vh; }
-  @media (max-width: 1100px) { #app { grid-template-columns: 300px 1fr; } #view3d-wrap { grid-column: 1 / -1; height: 45vh; } #app { grid-template-rows: 55vh 45vh; } }
+  #app { display: grid; grid-template-columns: 340px 1fr 1fr; grid-template-rows: 100vh; grid-template-rows: 100dvh; }
+  /* tablet: sidebar + map on top, 3D preview full-width below */
+  @media (max-width: 1100px) {
+    #app { grid-template-columns: 300px 1fr; grid-template-rows: 55vh 45vh; grid-template-rows: 55dvh 45dvh; }
+    #view3d-wrap { grid-column: 1 / -1; border-left: none; border-top: 1px solid var(--line); }
+  }
+  /* phone: vertical stack (map, controls, 3D preview), page scrolls */
+  @media (max-width: 640px) {
+    html, body { height: auto; overflow: auto; }
+    #app { display: flex; flex-direction: column; }
+    #map-wrap { order: -1; height: 55vh; height: 55dvh; }
+    #sidebar { border-right: none; border-top: 1px solid var(--line); padding: 14px 12px 28px; overflow: visible; }
+    #view3d-wrap { height: 50vh; height: 50dvh; border-left: none; border-top: 1px solid var(--line); }
+    /* 16px inputs stop iOS Safari from zooming in on focus */
+    input[type=number], input[type=text], select { font-size: 16px; }
+    button { padding: 10px 14px; }
+  }
 
   /* Sidebar */
   #sidebar { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 18px 16px 40px; }
@@ -75,7 +90,8 @@
   /* Map + 3D */
   #map-wrap, #view3d-wrap { position: relative; }
   #map { position:absolute; inset:0; }
-  #view3d { position:absolute; inset:0; display:block; }
+  /* canvas is a replaced element: inset alone won't stretch it, size it explicitly */
+  #view3d { position:absolute; inset:0; width:100%; height:100%; display:block; }
   .pane-label { position:absolute; top: 10px; left: 12px; z-index: 500; background: rgba(15,18,22,.8);
     border:1px solid var(--line); padding: 4px 10px; border-radius: 20px; font-size: 11px; color: var(--muted);
     text-transform: uppercase; letter-spacing: .6px; pointer-events:none; }
@@ -83,7 +99,7 @@
 
   .leaflet-container { background:#0b0e12; }
   #overlay {
-    position:absolute; inset:0; z-index:600; display:none; place-items:center;
+    position:fixed; inset:0; z-index:600; display:none; place-items:center;
     background: rgba(10,13,17,.55); backdrop-filter: blur(2px); font-size: 13px; color: var(--text);
   }
   #overlay .box { background: var(--panel); border:1px solid var(--line); padding: 16px 22px; border-radius: 12px; display:flex; gap:12px; align-items:center; }
@@ -128,11 +144,16 @@
       <div class="hint">Import a GPX route (e.g. from gpx.studio) — the puzzle area auto-fits the track.</div>
       <div class="search-row" style="margin-top:8px">
         <button id="routeBtn" style="flex:1">✏ Draw route</button>
+        <button id="routeGps" title="Add your current GPS location as a route point">📍 GPS</button>
         <button id="routeFit" style="display:none" title="Fit puzzle area to the route">Fit area</button>
         <button id="routeSave" style="display:none" title="Download route as GPX">GPX</button>
         <button id="routeClear" style="display:none" title="Delete route">✕</button>
       </div>
-      <div class="hint">Draw: click the map to add points, double-click to finish. Edit: drag a point to move it, click/drag a small midpoint to insert, right-click a point to delete.</div>
+      <div class="search-row" style="margin-top:8px">
+        <input id="routePt" type="text" placeholder="Add point: lat, lon (e.g. 35.36, 138.72)" />
+        <button id="routeAdd">Add</button>
+      </div>
+      <div class="hint">Draw: click the map to add points, type coordinates above, or 📍 for your GPS location; double-click to finish. Edit: drag a point to move it, click/drag a small midpoint to insert, right-click a point to delete.</div>
       <label class="row" style="margin-top:8px">Route on print</label>
       <select id="routeMode">
         <option value="inlay" selected>Red inlay — separate printable part</option>
@@ -405,6 +426,42 @@ map.on('dblclick', () => {
   setDrawing(false);
 });
 
+function addRoutePointManual() {
+  const raw = $('routePt').value.trim();
+  if (!raw) return;
+  const m = raw.split(/[,;\s]+/).map(parseFloat).filter(Number.isFinite);
+  if (m.length !== 2 || Math.abs(m[0]) > 90 || Math.abs(m[1]) > 180) {
+    setStatus('Enter coordinates as “lat, lon” — e.g. 35.3606, 138.7274', 'err');
+    return;
+  }
+  const [la, lo] = m;
+  route.pts.push([la, lo]);
+  redrawRoute(); updateRouteButtons();
+  map.panTo([la, lo]);
+  $('routePt').value = '';
+  $('routePt').focus(); // ready for the next point
+  setStatus(`Route point ${route.pts.length} added at ${la}, ${lo}`, 'ok');
+}
+$('routeAdd').addEventListener('click', addRoutePointManual);
+$('routePt').addEventListener('keydown', e => { if (e.key === 'Enter') addRoutePointManual(); });
+
+$('routeGps').addEventListener('click', () => {
+  if (!navigator.geolocation) { setStatus('Geolocation is not supported by this browser', 'err'); return; }
+  setStatus('Getting GPS fix…');
+  navigator.geolocation.getCurrentPosition(pos => {
+    const la = +pos.coords.latitude.toFixed(6), lo = +pos.coords.longitude.toFixed(6);
+    route.pts.push([la, lo]);
+    redrawRoute(); updateRouteButtons();
+    map.setView([la, lo], Math.max(map.getZoom(), 14));
+    setStatus(`GPS point ${route.pts.length} added (±${Math.round(pos.coords.accuracy)} m)`, 'ok');
+  }, err => {
+    const why = err.code === 1 ? 'permission denied' : err.code === 2 ? 'position unavailable' : 'timed out';
+    const httpsNote = location.protocol === 'http:' && !['localhost', '127.0.0.1'].includes(location.hostname)
+      ? ' — browsers only allow GPS over HTTPS (or localhost)' : '';
+    setStatus('GPS failed: ' + why + httpsNote, 'err');
+  }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 });
+});
+
 $('routeFit').addEventListener('click', () => {
   const km = fitAreaToBounds(L.latLngBounds(route.pts));
   setStatus(`Area fit to route: ${km} km`, 'ok');
@@ -536,6 +593,80 @@ async function fetchElevation(bounds, samples, onProgress) {
 }
 
 /* ============================================================================
+   WATER MASK — OSM water polygons (Overpass API), rasterized onto the
+   vertex grid with even-odd scanline fill (handles islands and abutting
+   riverbank polygons). Marks water[j*VW+i] = 1; returns true if any water.
+   ============================================================================ */
+async function fetchWaterMask(bounds, W, D, VW, VD, water) {
+  const [[latS, lonW], [latN, lonE]] = bounds;
+  const bbox = `${latS},${lonW},${latN},${lonE}`;
+  const q = `[out:json][timeout:25];(way["natural"="water"](${bbox});relation["natural"="water"](${bbox});way["waterway"="riverbank"](${bbox}););out geom;`;
+  const r = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'data=' + encodeURIComponent(q)
+  });
+  if (!r.ok) throw new Error('Overpass ' + r.status);
+  const j = await r.json();
+
+  const toGX = lon => (lon - lonW) / (lonE - lonW) * W;
+  const toGY = lat => (latN - lat) / (latN - latS) * D;
+  const same = (a, b) => Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lon - b.lon) < 1e-7;
+  const rings = [];
+  const addRing = geom => {
+    if (!geom || geom.length < 4 || !same(geom[0], geom[geom.length - 1])) return;
+    const ring = geom.map(pt => [toGX(pt.lon), toGY(pt.lat)]);
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [x, y] of ring) {
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x);
+      y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+    if (x1 - x0 < 0.7 && y1 - y0 < 0.7) return; // smaller than a grid cell
+    rings.push(ring);
+  };
+  // multipolygon relations split their rings across several open member ways —
+  // stitch segments end-to-end until they close
+  const stitchRings = segs => {
+    segs = segs.filter(s => s && s.length > 1).map(s => s.slice());
+    while (segs.length) {
+      let ring = segs.pop();
+      for (;;) {
+        if (same(ring[0], ring[ring.length - 1])) { addRing(ring); break; }
+        const end = ring[ring.length - 1];
+        const k = segs.findIndex(s => same(s[0], end) || same(s[s.length - 1], end));
+        if (k < 0) break; // unclosable fragment
+        const s = segs.splice(k, 1)[0];
+        ring = ring.concat(same(s[0], end) ? s.slice(1) : s.slice(0, -1).reverse());
+      }
+    }
+  };
+  for (const el of j.elements || []) {
+    if (el.type === 'way') addRing(el.geometry);
+    else if (el.type === 'relation') stitchRings((el.members || []).map(m => m.geometry));
+  }
+  if (!rings.length) return false;
+
+  let any = false;
+  for (let jv = 0; jv < VD; jv++) {
+    const xs = [];
+    for (const ring of rings) {
+      for (let k = 0; k + 1 < ring.length; k++) {
+        const [ax, ay] = ring[k], [bx, by] = ring[k + 1];
+        if ((ay <= jv && by > jv) || (by <= jv && ay > jv)) {
+          xs.push(ax + (jv - ay) * (bx - ax) / (by - ay));
+        }
+      }
+    }
+    xs.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const i0 = Math.max(0, Math.ceil(xs[k])), i1 = Math.min(W, Math.floor(xs[k + 1]));
+      for (let i = i0; i <= i1; i++) { water[jv * VW + i] = 1; any = true; }
+    }
+  }
+  return any;
+}
+
+/* ============================================================================
    JIGSAW PARTITION
    Assign each grid cell (i,j) to a puzzle piece. Straight piece boundaries are
    perturbed by mushroom-shaped tabs so neighboring pieces interlock. Because
@@ -624,6 +755,17 @@ async function buildModel(opts, onProgress) {
   }
   if (!isFinite(minE)) { minE = 0; maxE = 1; }
   if (maxE - minE < 1) maxE = minE + 1;
+
+  // --- water detection: OSM lake/river polygons + sea level ---
+  const water = new Uint8Array(VW * VD);
+  let hasWater = false;
+  try {
+    onProgress('Fetching water areas (OSM)…');
+    hasWater = await fetchWaterMask(bounds, W, D, VW, VD, water);
+  } catch (e) { console.warn('Water lookup failed, continuing without it:', e); }
+  for (let v = 0; v < water.length; v++) {
+    if (!water[v] && Hv[v] <= 0.3) { water[v] = 1; hasWater = true; } // sea
+  }
 
   onProgress('Cutting puzzle pieces…');
   const piece = buildPartition(W, D, nx, ny);
@@ -809,12 +951,12 @@ async function buildModel(opts, onProgress) {
   const maxZ = baseMM + (maxE - minE) * zScale;
 
   return {
-    pieces, routeParts, nx, ny, W, D, minE, maxE, triCount,
+    pieces, routeParts, hasWater, nx, ny, W, D, minE, maxE, triCount,
     modelWidth, modelDepth,
     pieceW: modelWidth / nx, pieceH: modelDepth / ny,
     zoom: elevSrc.zoom,
     zCuts, maxZ, eStep,
-    grid: { Hv, piece, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
+    grid: { Hv, piece, water, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
   };
 }
 
@@ -832,13 +974,26 @@ function bandOfZ(z, zCuts) {
   return 3;
 }
 
-/* Fill each piece's vertex-color array from vertex height → band color. */
+/* Fill each piece's vertex-color array from vertex height → band color.
+   Water surfaces (flat lake/sea areas) override the band with blue. */
+const WATER_HEX = '#3b7bd4';
 function recolorModel(model) {
   const cols = currentBandColors();
+  const wcol = hexToRgb(WATER_HEX);
+  const g = model.grid;
   for (const P of model.pieces) {
     if (!P.col || P.col.length !== P.pos.length) P.col = new Float32Array(P.pos.length);
     for (let k = 0; k < P.pos.length; k += 3) {
-      const c = cols[bandOfZ(P.pos[k + 2], model.zCuts)];
+      let c = cols[bandOfZ(P.pos[k + 2], model.zCuts)];
+      if (model.hasWater) {
+        const i = clamp(Math.round(P.pos[k] / g.dx), 0, g.W);
+        const j = clamp(Math.round((g.modelDepth - P.pos[k + 1]) / g.dy), 0, g.D);
+        if (g.water[j * g.VW + i]) {
+          // only the top skin (surface + upper wall edge), not the full column
+          const topZ = g.baseMM + (g.Hv[j * g.VW + i] - model.minE) * g.zScale;
+          if (P.pos[k + 2] > topZ - 1.2) c = wcol;
+        }
+      }
       P.col[k] = c[0]; P.col[k + 1] = c[1]; P.col[k + 2] = c[2];
     }
   }
@@ -1041,8 +1196,10 @@ $('exportOne').addEventListener('click', exportOne);
    cut heights. Every solid gets a 3MF material (pid/pindex), so Bambu Studio
    imports each piece as one object with 4 parts → 4 AMS filament slots.
    ============================================================================ */
+const WATER_CAP_MM = 0.8; // thickness of the blue water skin in the 3MF
+
 function buildBandSolidMesh(model, pieceId, band) {
-  const { Hv, piece, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
+  const { Hv, piece, water, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
   const minE = model.minE;
   const zOf = e => baseMM + (e - minE) * zScale;
   const cLo = band === 0 ? 0 : model.zCuts[band - 1];
@@ -1050,7 +1207,8 @@ function buildBandSolidMesh(model, pieceId, band) {
   const MINT = 0.02; // minimum slab thickness (mm) so clipped cells stay manifold
 
   const X = i => i * dx, Y = j => modelDepth - j * dy;
-  const rawTop = (i, j) => zOf(Hv[j * VW + i]);
+  // band solids stop below the surface at water vertices; the water cap fills the skin
+  const rawTop = (i, j) => zOf(Hv[j * VW + i]) - (water[j * VW + i] ? WATER_CAP_MM : 0);
   const topV = (i, j) => Math.max(clamp(rawTop(i, j), cLo, cHi), cLo + MINT);
   const inc = (i, j) => {
     if (i < 0 || j < 0 || i >= W || j >= D) return false;
@@ -1098,6 +1256,56 @@ function buildBandSolidMesh(model, pieceId, band) {
   return pos;
 }
 
+/* Thin blue skin over water cells of one piece: bottom = surface − cap depth
+   (tapering to zero at the shore), top = terrain surface. */
+function buildWaterCapMesh(model, pieceId) {
+  const { Hv, piece, water, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
+  const zOf = e => baseMM + (e - model.minE) * zScale;
+  const X = i => i * dx, Y = j => modelDepth - j * dy;
+  const top = (i, j) => zOf(Hv[j * VW + i]);
+  const dep = (i, j) => water[j * VW + i] ? WATER_CAP_MM : 0;
+  const bot = (i, j) => top(i, j) - dep(i, j);
+  const inc = (i, j) => i >= 0 && j >= 0 && i < W && j < D && piece[j * W + i] === pieceId &&
+    (dep(i, j) > 0 || dep(i + 1, j) > 0 || dep(i, j + 1) > 0 || dep(i + 1, j + 1) > 0);
+
+  const pos = [];
+  // same (a, c, b) flip as the other emitters so faces wind outward
+  const push = (ax, ay, az, bx, by, bz, cx, cy, cz) => pos.push(ax, ay, az, cx, cy, cz, bx, by, bz);
+
+  for (let j = 0; j < D; j++) {
+    for (let i = 0; i < W; i++) {
+      if (!inc(i, j)) continue;
+      const x0 = X(i), x1 = X(i + 1), y0 = Y(j), y1 = Y(j + 1);
+      const t00 = top(i, j), t10 = top(i + 1, j), t01 = top(i, j + 1), t11 = top(i + 1, j + 1);
+      const b00 = bot(i, j), b10 = bot(i + 1, j), b01 = bot(i, j + 1), b11 = bot(i + 1, j + 1);
+      // top
+      push(x0, y0, t00, x1, y0, t10, x1, y1, t11);
+      push(x0, y0, t00, x1, y1, t11, x0, y1, t01);
+      // bottom (reversed)
+      push(x0, y0, b00, x1, y1, b11, x1, y0, b10);
+      push(x0, y0, b00, x0, y1, b01, x1, y1, b11);
+      // walls where the cap ends (degenerate zero-height quads get deduped away)
+      if (!inc(i + 1, j)) {
+        push(x1, y0, t10, x1, y0, b10, x1, y1, t11);
+        push(x1, y1, t11, x1, y0, b10, x1, y1, b11);
+      }
+      if (!inc(i - 1, j)) {
+        push(x0, y0, t00, x0, y1, t01, x0, y0, b00);
+        push(x0, y1, t01, x0, y1, b01, x0, y0, b00);
+      }
+      if (!inc(i, j - 1)) {
+        push(x0, y0, t00, x0, y0, b00, x1, y0, t10);
+        push(x1, y0, t10, x0, y0, b00, x1, y0, b10);
+      }
+      if (!inc(i, j + 1)) {
+        push(x0, y1, t01, x1, y1, t11, x0, y1, b01);
+        push(x1, y1, t11, x1, y1, b11, x0, y1, b01);
+      }
+    }
+  }
+  return pos;
+}
+
 const fmtN = v => (Math.round(v * 1000) / 1000).toString();
 
 /* Triangle soup → indexed 3MF <object> XML (vertices deduped at 1 µm). */
@@ -1136,7 +1344,9 @@ async function exportBambu() {
       res.push(`<base name="band${k + 1}_${bandNames[k]}" displaycolor="${$('col' + k).value.toUpperCase()}FF"/>`);
     }
     if (model.routeParts) res.push('<base name="route_red" displaycolor="#E5534BFF"/>');
+    if (model.hasWater) res.push(`<base name="water_blue" displaycolor="${WATER_HEX.toUpperCase()}FF"/>`);
     res.push('</basematerials>');
+    const waterPindex = model.routeParts ? 5 : 4;
 
     let nextId = 2;
     const pieceObjs = [];
@@ -1151,6 +1361,11 @@ async function exportBambu() {
       const R = model.routeParts && model.routeParts.find(r => r.pid === P.id);
       if (R) {
         const xml = meshObjectXML(nextId, R.pos, 4, `r${row}c${col}_route`);
+        if (xml) { res.push(xml); comp.push(nextId); nextId++; }
+      }
+      // this piece's blue water skin
+      if (model.hasWater) {
+        const xml = meshObjectXML(nextId, buildWaterCapMesh(model, P.id), waterPindex, `r${row}c${col}_water`);
         if (xml) { res.push(xml); comp.push(nextId); nextId++; }
       }
       pieceObjs.push({ id: nextId++, comp, P, row, col });
