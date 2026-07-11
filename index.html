@@ -133,6 +133,13 @@
         <button id="routeClear" style="display:none" title="Delete route">✕</button>
       </div>
       <div class="hint">Draw: click the map to add points, double-click to finish. Edit: drag a point to move it, click/drag a small midpoint to insert, right-click a point to delete.</div>
+      <label class="row" style="margin-top:8px">Route on print</label>
+      <select id="routeMode">
+        <option value="inlay" selected>Red inlay — separate printable part</option>
+        <option value="emboss">Raised ridge (~1 mm)</option>
+        <option value="engrave">Engraved groove (~0.8 mm)</option>
+        <option value="off">Off</option>
+      </select>
       <label class="row">Area size <span class="val"><span id="areaVal">24</span> km</span></label>
       <input id="area" type="range" min="2" max="120" value="24" step="1" />
       <div class="two-col" style="margin-top:8px">
@@ -628,6 +635,47 @@ async function buildModel(opts, onProgress) {
   const modelDepth = widthMM * (boxHeightM / boxWidthM);
   const mmPerMeter = modelWidth / boxWidthM;
   const dx = modelWidth / W, dy = modelDepth / D;
+
+  // --- stamp the route into the heightfield (ridge, groove, or inlay channel) ---
+  let rd = null; // inlay mode: per-vertex groove depth (m), used to build the insert
+  if (opts.routePath && opts.routePath.length > 1 && opts.routeMode !== 'off') {
+    onProgress('Stamping route…');
+    const zSc = mmPerMeter * vex;
+    const inlay = opts.routeMode === 'inlay';
+    if (inlay) rd = new Float32Array(VW * VD);
+    const halfW = inlay ? 1.6 : 0.9;                          // half-width on the print (mm)
+    const dMM = inlay ? -1.2 : opts.routeMode === 'engrave' ? -0.8 : 1.0; // depth/height (mm)
+    // route lat/lon → model mm (same mapping as vertex X/Y below)
+    const seg = opts.routePath.map(([la, lo]) => [
+      (lo - lonW) / (lonE - lonW) * modelWidth,
+      (la - latS) / (latN - latS) * modelDepth
+    ]);
+    const distToSeg = (px, py, ax, ay, bx, by) => {
+      const vx = bx - ax, vy = by - ay;
+      const t = clamp(((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy || 1), 0, 1);
+      return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+    };
+    for (let j = 0; j < VD; j++) {
+      const yv = modelDepth - j * dy;
+      for (let i = 0; i < VW; i++) {
+        const xv = i * dx;
+        let d = Infinity;
+        for (let s = 0; s + 1 < seg.length && d > 0; s++) {
+          d = Math.min(d, distToSeg(xv, yv, seg[s][0], seg[s][1], seg[s + 1][0], seg[s + 1][1]));
+        }
+        if (d < halfW) {
+          const f = 1 - (d / halfW) ** 2;                     // rounded cross-section
+          const dE = (dMM * f) / zSc;
+          Hv[j * VW + i] += dE;
+          if (rd) rd[j * VW + i] = -dE;                       // groove depth (m, positive)
+        }
+      }
+    }
+    // heights changed → refresh range so base offset and color bands stay aligned
+    minE = Infinity; maxE = -Infinity;
+    for (let k = 0; k < Hv.length; k++) { const e = Hv[k]; if (e < minE) minE = e; if (e > maxE) maxE = e; }
+  }
+
   const zOf = e => baseMM + (e - minE) * mmPerMeter * vex;
 
   // model X/Y helpers
@@ -693,6 +741,60 @@ async function buildModel(opts, onProgress) {
   }
   for (const P of pieces) triCount += P.pos.length / 9;
 
+  // --- red route inserts (inlay mode), one closed solid per puzzle piece ---
+  // Bottom follows the grooved terrain (mates with the channel); top follows
+  // the ORIGINAL terrain + PROUD, so each strip sits in its piece's groove
+  // and stands slightly proud of the surface.
+  let routeParts = null;
+  if (rd) {
+    const PROUD = 0.6; // mm above the original surface
+    const bZ = (i, j) => zOf(H(i, j));                              // grooved surface
+    const tZ = (i, j) => zOf(H(i, j) + rd[j * VW + i]) + PROUD;     // original + proud
+    const inR = (i, j) => i >= 0 && j >= 0 && i < W && j < D &&
+      (rd[j * VW + i] > 0 || rd[j * VW + i + 1] > 0 || rd[(j + 1) * VW + i] > 0 || rd[(j + 1) * VW + i + 1] > 0);
+    // wall wherever the neighbor cell is outside the route OR in another piece,
+    // so each piece's chunk is a closed solid ending exactly at the jigsaw cut
+    const inRP = (i, j, p) => inR(i, j) && piece[j * W + i] === p;
+    const parts = new Map(); // pieceId → {pos, nrm}
+    for (let j = 0; j < D; j++) {
+      for (let i = 0; i < W; i++) {
+        if (!inR(i, j)) continue;
+        const p = piece[j * W + i];
+        let R = parts.get(p);
+        if (!R) { R = { pos: [], nrm: [], pid: p }; parts.set(p, R); }
+        const x0 = X(i), x1 = X(i + 1), y0 = Y(j), y1 = Y(j + 1);
+        const b00 = bZ(i, j), b10 = bZ(i + 1, j), b01 = bZ(i, j + 1), b11 = bZ(i + 1, j + 1);
+        const t00 = tZ(i, j), t10 = tZ(i + 1, j), t01 = tZ(i, j + 1), t11 = tZ(i + 1, j + 1);
+        // top
+        tri(R, x0, y0, t00, x1, y0, t10, x1, y1, t11);
+        tri(R, x0, y0, t00, x1, y1, t11, x0, y1, t01);
+        // bottom (reversed)
+        tri(R, x0, y0, b00, x1, y1, b11, x1, y0, b10);
+        tri(R, x0, y0, b00, x0, y1, b01, x1, y1, b11);
+        // side walls where the strip (or this piece's part of it) ends
+        if (!inRP(i + 1, j, p)) {
+          tri(R, x1, y0, t10, x1, y0, b10, x1, y1, t11);
+          tri(R, x1, y1, t11, x1, y0, b10, x1, y1, b11);
+        }
+        if (!inRP(i - 1, j, p)) {
+          tri(R, x0, y0, t00, x0, y1, t01, x0, y0, b00);
+          tri(R, x0, y1, t01, x0, y1, b01, x0, y0, b00);
+        }
+        if (!inRP(i, j - 1, p)) {
+          tri(R, x0, y0, t00, x0, y0, b00, x1, y0, t10);
+          tri(R, x1, y0, t10, x0, y0, b00, x1, y0, b10);
+        }
+        if (!inRP(i, j + 1, p)) {
+          tri(R, x0, y1, t01, x1, y1, t11, x0, y1, b01);
+          tri(R, x1, y1, t11, x1, y1, b11, x0, y1, b01);
+        }
+      }
+    }
+    routeParts = [...parts.values()].filter(R => R.pos.length);
+    if (!routeParts.length) routeParts = null;
+    else for (const R of routeParts) triCount += R.pos.length / 9;
+  }
+
   // piece centroids (for exploded preview)
   for (const P of pieces) {
     let sx = 0, sy = 0, n = P.pos.length / 3;
@@ -707,7 +809,7 @@ async function buildModel(opts, onProgress) {
   const maxZ = baseMM + (maxE - minE) * zScale;
 
   return {
-    pieces, nx, ny, W, D, minE, maxE, triCount,
+    pieces, routeParts, nx, ny, W, D, minE, maxE, triCount,
     modelWidth, modelDepth,
     pieceW: modelWidth / nx, pieceH: modelDepth / ny,
     zoom: elevSrc.zoom,
@@ -762,6 +864,7 @@ function onColorChange() {
   recolorModel(state.model);
   if (!modelGroup) return;
   modelGroup.children.forEach((mesh, i) => {
+    if (i >= state.model.pieces.length) return; // route insert: fixed red, no vertex colors
     const attr = mesh.geometry.getAttribute('color');
     attr.array.set(state.model.pieces[i].col);
     attr.needsUpdate = true;
@@ -826,6 +929,20 @@ function showModel(model) {
     mesh.position.set((P.cx - cx) * (gap - 1), (P.cy - cy) * (gap - 1), 0);
     modelGroup.add(mesh);
   }
+  // red route inserts, exploded along with the piece each one belongs to
+  // (added after all pieces so piece index ↔ child index still lines up)
+  if (model.routeParts) {
+    for (const R of model.routeParts) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(R.pos, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(R.nrm, 3));
+      const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ color: 0xe5534b, shininess: 20 }));
+      const P = model.pieces[R.pid];
+      mesh.position.set((P.cx - cx) * (gap - 1), (P.cy - cy) * (gap - 1), 0);
+      modelGroup.add(mesh);
+    }
+  }
+
   // center the group at origin
   modelGroup.position.set(-cx, -cy, 0);
 
@@ -897,6 +1014,10 @@ async function exportZip() {
   for (const P of state.model.pieces) {
     const col = P.id % state.model.nx, row = Math.floor(P.id / state.model.nx);
     zip.file(`piece_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(P));
+  }
+  for (const R of state.model.routeParts || []) {
+    const col = R.pid % state.model.nx, row = Math.floor(R.pid / state.model.nx);
+    zip.file(`route_red_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(R));
   }
   zip.file('README.txt',
     `TopoPuzzle export\nPieces: ${state.model.nx} x ${state.model.ny}\n` +
@@ -1014,6 +1135,7 @@ async function exportBambu() {
     for (let k = 0; k < 4; k++) {
       res.push(`<base name="band${k + 1}_${bandNames[k]}" displaycolor="${$('col' + k).value.toUpperCase()}FF"/>`);
     }
+    if (model.routeParts) res.push('<base name="route_red" displaycolor="#E5534BFF"/>');
     res.push('</basematerials>');
 
     let nextId = 2;
@@ -1023,6 +1145,12 @@ async function exportBambu() {
       const comp = [];
       for (let b = 0; b < 4; b++) {
         const xml = meshObjectXML(nextId, buildBandSolidMesh(model, P.id, b), b, `r${row}c${col}_band${b + 1}`);
+        if (xml) { res.push(xml); comp.push(nextId); nextId++; }
+      }
+      // this piece's segment of the red route inlay (5th material)
+      const R = model.routeParts && model.routeParts.find(r => r.pid === P.id);
+      if (R) {
+        const xml = meshObjectXML(nextId, R.pos, 4, `r${row}c${col}_route`);
         if (xml) { res.push(xml); comp.push(nextId); nextId++; }
       }
       pieceObjs.push({ id: nextId++, comp, P, row, col });
@@ -1091,6 +1219,16 @@ async function generate() {
       vex: parseFloat($('vex').value),
       widthMM: parseFloat($('width').value),
       baseMM: parseFloat($('base').value),
+      routeMode: $('routeMode').value,
+      routePath: (() => {
+        let path = route.pts.length > 1 ? route.pts
+          : gpxLayer ? gpxLayer.getLatLngs().map(ll => [ll.lat, ll.lng]) : null;
+        if (path && path.length > 400) { // cap segments so stamping stays fast
+          const step = Math.ceil(path.length / 400);
+          path = path.filter((_, k) => k % step === 0 || k === path.length - 1);
+        }
+        return path;
+      })(),
     };
 
     const model = await buildModel(opts, txt => overlay(true, txt));
