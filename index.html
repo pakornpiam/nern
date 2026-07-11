@@ -126,6 +126,13 @@
         <button id="gpxClear" style="display:none" title="Remove GPX track">✕</button>
       </div>
       <div class="hint">Import a GPX route (e.g. from gpx.studio) — the puzzle area auto-fits the track.</div>
+      <div class="search-row" style="margin-top:8px">
+        <button id="routeBtn" style="flex:1">✏ Draw route</button>
+        <button id="routeFit" style="display:none" title="Fit puzzle area to the route">Fit area</button>
+        <button id="routeSave" style="display:none" title="Download route as GPX">GPX</button>
+        <button id="routeClear" style="display:none" title="Delete route">✕</button>
+      </div>
+      <div class="hint">Draw: click the map to add points, double-click to finish. Edit: drag a point to move it, click/drag a small midpoint to insert, right-click a point to delete.</div>
       <label class="row">Area size <span class="val"><span id="areaVal">24</span> km</span></label>
       <input id="area" type="range" min="2" max="120" value="24" step="1" />
       <div class="two-col" style="margin-top:8px">
@@ -244,6 +251,7 @@ function drawBox() {
 drawBox();
 
 map.on('click', e => {
+  if (route.drawing) { route.pts.push([e.latlng.lat, e.latlng.lng]); redrawRoute(); updateRouteButtons(); return; }
   state.center.lat = +e.latlng.lat.toFixed(4);
   state.center.lon = +e.latlng.lng.toFixed(4);
   $('lat').value = state.center.lat;
@@ -287,6 +295,21 @@ $('searchBtn').addEventListener('click', doSearch);
 $('search').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 function zoomForKm(km) { return clamp(Math.round(13 - Math.log2(km / 3)), 3, 14); }
 
+/* Recenter + resize the puzzle box to cover latLng bounds; returns area km. */
+function fitAreaToBounds(b) {
+  const c = b.getCenter();
+  state.center.lat = +c.lat.toFixed(4);
+  state.center.lon = +c.lng.toFixed(4);
+  $('lat').value = state.center.lat; $('lon').value = state.center.lon;
+  const wKm = haversine(c.lat, b.getWest(), c.lat, b.getEast()) / 1000;
+  const hKm = haversine(b.getSouth(), c.lng, b.getNorth(), c.lng) / 1000;
+  const km = clamp(Math.ceil(Math.max(wKm, hKm, 1) * 1.15), 2, 120);
+  state.areaKm = km; $('area').value = km; $('areaVal').textContent = km;
+  drawBox();
+  map.fitBounds(b.pad(0.15));
+  return km;
+}
+
 /* ---------- GPX track import ---------- */
 let gpxLayer = null;
 $('gpxBtn').addEventListener('click', () => $('gpxFile').click());
@@ -302,16 +325,7 @@ $('gpxFile').addEventListener('change', async e => {
     if (!pts.length) throw new Error('No track points found in GPX');
     if (gpxLayer) map.removeLayer(gpxLayer);
     gpxLayer = L.polyline(pts, { color: '#f2a65a', weight: 3, opacity: 0.9 }).addTo(map);
-    const b = gpxLayer.getBounds(), c = b.getCenter();
-    state.center.lat = +c.lat.toFixed(4);
-    state.center.lon = +c.lng.toFixed(4);
-    $('lat').value = state.center.lat; $('lon').value = state.center.lon;
-    const wKm = haversine(c.lat, b.getWest(), c.lat, b.getEast()) / 1000;
-    const hKm = haversine(b.getSouth(), c.lng, b.getNorth(), c.lng) / 1000;
-    const km = clamp(Math.ceil(Math.max(wKm, hKm, 1) * 1.15), 2, 120);
-    state.areaKm = km; $('area').value = km; $('areaVal').textContent = km;
-    drawBox();
-    map.fitBounds(b.pad(0.15));
+    const km = fitAreaToBounds(gpxLayer.getBounds());
     $('gpxClear').style.display = '';
     setStatus(`GPX loaded: ${pts.length} points, area ${km} km`, 'ok');
   } catch (err) { setStatus(err.message, 'err'); }
@@ -321,6 +335,85 @@ $('gpxClear').addEventListener('click', () => {
   if (gpxLayer) { map.removeLayer(gpxLayer); gpxLayer = null; }
   $('gpxClear').style.display = 'none';
   setStatus('GPX track removed');
+});
+
+/* ---------- Route drawing / editing ---------- */
+const route = { pts: [], layer: L.layerGroup().addTo(map), line: null, drawing: false };
+const ROUTE_STYLE = { color: '#4da3ff', weight: 3, opacity: 0.95 };
+
+function routeIcon(mid) {
+  const s = mid ? 10 : 14;
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:${s}px;height:${s}px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 3px rgba(0,0,0,.6);background:${mid ? 'rgba(77,163,255,.55)' : '#4da3ff'}"></div>`,
+    iconSize: [s, s], iconAnchor: [s / 2, s / 2]
+  });
+}
+
+function updateRouteButtons() {
+  const n = route.pts.length;
+  $('routeClear').style.display = n ? '' : 'none';
+  $('routeFit').style.display = n > 1 ? '' : 'none';
+  $('routeSave').style.display = n > 1 ? '' : 'none';
+}
+
+function redrawRoute() {
+  route.layer.clearLayers();
+  route.line = route.pts.length > 1 ? L.polyline(route.pts, ROUTE_STYLE).addTo(route.layer) : null;
+
+  route.pts.forEach((ll, i) => {
+    const m = L.marker(ll, { icon: routeIcon(false), draggable: true }).addTo(route.layer);
+    m.on('drag', e => {
+      const p = e.target.getLatLng();
+      route.pts[i] = [p.lat, p.lng];
+      if (route.line) route.line.setLatLngs(route.pts);
+    });
+    m.on('dragend', () => { redrawRoute(); });
+    m.on('contextmenu', () => { route.pts.splice(i, 1); redrawRoute(); updateRouteButtons(); });
+  });
+
+  // midpoint handles: click or drag one to insert a new point in that segment
+  for (let i = 0; i + 1 < route.pts.length; i++) {
+    const a = route.pts[i], b = route.pts[i + 1];
+    const m = L.marker([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], { icon: routeIcon(true), draggable: true }).addTo(route.layer);
+    const insert = ll => { route.pts.splice(i + 1, 0, [ll.lat, ll.lng]); redrawRoute(); updateRouteButtons(); };
+    m.on('click', e => insert(e.latlng));
+    m.on('dragend', e => insert(e.target.getLatLng()));
+  }
+}
+
+function setDrawing(on) {
+  route.drawing = on;
+  $('routeBtn').textContent = on ? '✓ Finish route' : '✏ Draw route';
+  $('routeBtn').style.borderColor = on ? 'var(--accent)' : '';
+  map.getContainer().style.cursor = on ? 'crosshair' : '';
+  if (on) map.doubleClickZoom.disable(); else map.doubleClickZoom.enable();
+}
+$('routeBtn').addEventListener('click', () => setDrawing(!route.drawing));
+map.on('dblclick', () => {
+  if (!route.drawing) return;
+  // the double-click also fired two single clicks → drop the duplicate point
+  route.pts.pop();
+  redrawRoute(); updateRouteButtons();
+  setDrawing(false);
+});
+
+$('routeFit').addEventListener('click', () => {
+  const km = fitAreaToBounds(L.latLngBounds(route.pts));
+  setStatus(`Area fit to route: ${km} km`, 'ok');
+});
+$('routeClear').addEventListener('click', () => {
+  route.pts = []; route.line = null; route.layer.clearLayers();
+  setDrawing(false); updateRouteButtons();
+  setStatus('Route deleted');
+});
+$('routeSave').addEventListener('click', () => {
+  const seg = route.pts.map(p => `<trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"/>`).join('');
+  const gpx = '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<gpx version="1.1" creator="TopoPuzzle" xmlns="http://www.topografix.com/GPX/1/1">' +
+    `<trk><name>TopoPuzzle route</name><trkseg>${seg}</trkseg></trk></gpx>`;
+  download(new Blob([gpx], { type: 'application/gpx+xml' }), 'topopuzzle_route.gpx');
+  setStatus('Downloaded topopuzzle_route.gpx', 'ok');
 });
 
 /* ---------- Slider bindings ---------- */
