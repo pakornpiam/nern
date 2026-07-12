@@ -68,6 +68,9 @@
   input:focus, select:focus { border-color: var(--accent); }
   .search-row { display:flex; gap:6px; }
   .search-row button { white-space: nowrap; }
+  .tabs { display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; margin-bottom:10px; }
+  .tabs button { flex:1; border:none; border-radius:0; padding:8px 6px; }
+  .tabs button.active { background: var(--accent); color:#0f1216; font-weight:600; }
 
   button {
     background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
@@ -200,6 +203,47 @@
       <div class="hint">Terrain is split into 4 elevation bands. Each band exports as its own solid with a material assigned, so Bambu Studio maps them to 4 AMS filament slots.</div>
     </div>
 
+    <div class="group">
+      <h2>5 · Frame plate</h2>
+      <div class="tabs">
+        <button id="frameTabOff" class="active">No frame</button>
+        <button id="frameTabOn">With frame</button>
+      </div>
+      <div id="frameOpts" style="display:none">
+        <label class="row" style="margin-top:0">Frame shape (print + plate)</label>
+        <select id="frameStyle">
+          <option value="circle" selected>Circle</option>
+          <option value="square">Square</option>
+          <option value="hex">Hexagon</option>
+        </select>
+        <label class="row">Plate margin <span class="val"><span id="frameMarginVal">14</span> mm</span></label>
+        <input id="frameMargin" type="range" min="4" max="50" value="14" step="1" />
+        <label class="row">Rim height (above puzzle base) <span class="val"><span id="frameThickVal">2</span> mm</span></label>
+        <input id="frameThick" type="range" min="0.5" max="15" value="2" step="0.5" />
+        <div class="color-grid" style="margin-top:8px">
+          <label><input id="frameCol" type="color" value="#9aa7b3" /><span><b>Plate color</b></span></label>
+          <label><input id="frameTextCol" type="color" value="#111111" /><span><b>Text color</b></span></label>
+        </div>
+        <label class="row" style="margin-top:8px">Text on plate (Thai / English)</label>
+        <input id="frameText" type="text" placeholder="e.g. ภูเขาไฟฟูจิ · Mount Fuji" />
+        <label class="row">Text size <span class="val"><span id="frameTextSizeVal">10</span> mm</span></label>
+        <input id="frameTextSize" type="range" min="5" max="30" value="10" step="0.5" />
+        <label class="row">Text position <span class="val"><span id="frameTextPosVal">0</span> mm</span></label>
+        <input id="frameTextPos" type="range" min="-20" max="20" value="0" step="0.5" />
+        <div class="hint">Cuts the puzzle to the frame shape and adds a matching display tray (printed as its own part); the text is inlaid flush in the tray's lower rim.</div>
+      </div>
+      <div id="noFrameOpts">
+        <label class="row" style="margin-top:0">Print shape</label>
+        <select id="printShape">
+          <option value="none" selected>Rectangle</option>
+          <option value="circle">Circle</option>
+          <option value="square">Square</option>
+          <option value="hex">Hexagon</option>
+        </select>
+        <div class="hint">Puzzle only, cut to this shape — no display tray.</div>
+      </div>
+    </div>
+
     <button id="generate" class="primary">Generate terrain</button>
 
     <div class="group" style="margin-top:12px">
@@ -214,6 +258,7 @@
     <button id="exportBambu" class="ghost" disabled>⬇ Export Bambu 4-color puzzle (.3mf)</button>
     <button id="exportZip" class="ghost" disabled>⬇ Export puzzle pieces (.zip of STL)</button>
     <button id="exportOne" class="ghost" disabled>⬇ Export single combined STL</button>
+    <button id="exportFrame" class="ghost" disabled>⬇ Export frame plate (STL)</button>
 
     <div id="status"></div>
     <p class="hint" style="margin-top:16px">Elevation: AWS Terrarium terrain tiles. Basemap: OpenStreetMap. Geocoding: Nominatim. All free, no API key.</p>
@@ -666,6 +711,22 @@ async function fetchWaterMask(bounds, W, D, VW, VD, water) {
   return any;
 }
 
+/* Inside test for the print/plate shapes, centered at origin, half-extents
+   hw × hh. 'circle' is an ellipse when the footprint isn't square; 'hex' is
+   flat-top, inscribed. Anything else = full rectangle. */
+function shapeInsideFn(style, hw, hh) {
+  if (style === 'circle') return (x, y) => (x * x) / (hw * hw) + (y * y) / (hh * hh) <= 1;
+  if (style === 'hex') {
+    const s3 = Math.sqrt(3), R = Math.min(hw, 2 * hh / s3);
+    return (x, y) => Math.abs(y) <= s3 * R / 2 && s3 * Math.abs(x) + Math.abs(y) <= s3 * R;
+  }
+  if (style === 'square') {
+    const s = Math.min(hw, hh); // true square, centered
+    return (x, y) => Math.abs(x) <= s && Math.abs(y) <= s;
+  }
+  return (x, y) => Math.abs(x) <= hw && Math.abs(y) <= hh; // rectangle
+}
+
 /* ============================================================================
    JIGSAW PARTITION
    Assign each grid cell (i,j) to a puzzle piece. Straight piece boundaries are
@@ -778,6 +839,18 @@ async function buildModel(opts, onProgress) {
   const mmPerMeter = modelWidth / boxWidthM;
   const dx = modelWidth / W, dy = modelDepth / D;
 
+  // --- clip the print to the frame-plate shape (circle / square / hex) ---
+  const cellShape = new Uint8Array(W * D);
+  {
+    const ins = shapeInsideFn(opts.frameStyle || 'none', modelWidth / 2, modelDepth / 2);
+    for (let j = 0; j < D; j++) {
+      const y = modelDepth - (j + 0.5) * dy - modelDepth / 2;
+      for (let i = 0; i < W; i++) {
+        cellShape[j * W + i] = ins((i + 0.5) * dx - modelWidth / 2, y) ? 1 : 0;
+      }
+    }
+  }
+
   // --- stamp the route into the heightfield (ridge, groove, or inlay channel) ---
   let rd = null; // inlay mode: per-vertex groove depth (m), used to build the insert
   if (opts.routePath && opts.routePath.length > 1 && opts.routeMode !== 'off') {
@@ -829,7 +902,7 @@ async function buildModel(opts, onProgress) {
   const pieces = [];
   for (let p = 0; p < nPieces; p++) pieces.push({ pos: [], nrm: [], col: [], id: p });
 
-  const inPiece = (i, j, p) => (i >= 0 && j >= 0 && i < W && j < D && piece[j * W + i] === p);
+  const inPiece = (i, j, p) => (i >= 0 && j >= 0 && i < W && j < D && piece[j * W + i] === p && !!cellShape[j * W + i]);
 
   function tri(P, ax, ay, az, bx, by, bz, cx, cy, cz) {
     // Y(j) flips the grid's j axis, which mirrors orientation — emit as
@@ -845,6 +918,7 @@ async function buildModel(opts, onProgress) {
   let triCount = 0;
   for (let j = 0; j < D; j++) {
     for (let i = 0; i < W; i++) {
+      if (!cellShape[j * W + i]) continue;
       const p = piece[j * W + i];
       const P = pieces[p];
       // corner coords
@@ -892,7 +966,7 @@ async function buildModel(opts, onProgress) {
     const PROUD = 0.6; // mm above the original surface
     const bZ = (i, j) => zOf(H(i, j));                              // grooved surface
     const tZ = (i, j) => zOf(H(i, j) + rd[j * VW + i]) + PROUD;     // original + proud
-    const inR = (i, j) => i >= 0 && j >= 0 && i < W && j < D &&
+    const inR = (i, j) => i >= 0 && j >= 0 && i < W && j < D && !!cellShape[j * W + i] &&
       (rd[j * VW + i] > 0 || rd[j * VW + i + 1] > 0 || rd[(j + 1) * VW + i] > 0 || rd[(j + 1) * VW + i + 1] > 0);
     // wall wherever the neighbor cell is outside the route OR in another piece,
     // so each piece's chunk is a closed solid ending exactly at the jigsaw cut
@@ -937,11 +1011,11 @@ async function buildModel(opts, onProgress) {
     else for (const R of routeParts) triCount += R.pos.length / 9;
   }
 
-  // piece centroids (for exploded preview)
+  // piece centroids (for exploded preview); clipped-away pieces may be empty
   for (const P of pieces) {
     let sx = 0, sy = 0, n = P.pos.length / 3;
     for (let k = 0; k < P.pos.length; k += 3) { sx += P.pos[k]; sy += P.pos[k + 1]; }
-    P.cx = sx / n; P.cy = sy / n;
+    P.cx = n ? sx / n : modelWidth / 2; P.cy = n ? sy / n : modelDepth / 2;
   }
 
   // 4 equal elevation bands → z-heights of the 3 interior cuts (model mm)
@@ -956,7 +1030,7 @@ async function buildModel(opts, onProgress) {
     pieceW: modelWidth / nx, pieceH: modelDepth / ny,
     zoom: elevSrc.zoom,
     zCuts, maxZ, eStep,
-    grid: { Hv, piece, water, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
+    grid: { Hv, piece, water, cellShape, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
   };
 }
 
@@ -1066,7 +1140,7 @@ function resize() {
 }
 function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
 
-function showModel(model) {
+function showModel(model, keepCamera) {
   if (!modelGroup) return; // 3D preview unavailable (no WebGL) — exports still work
   while (modelGroup.children.length) modelGroup.remove(modelGroup.children[0]);
 
@@ -1098,14 +1172,31 @@ function showModel(model) {
     }
   }
 
+  // frame plate (gray) + embossed text (red), under the assembled footprint
+  if (model.frame) {
+    const F = model.frame;
+    const addMesh = (src, color) => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(src.pos, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(src.nrm, 3));
+      const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ color, shininess: 16 }));
+      mesh.position.set(F.tx, F.ty, F.tz);
+      modelGroup.add(mesh);
+    };
+    addMesh(F.plate, parseInt($('frameCol').value.slice(1), 16));
+    if (F.text) addMesh(F.text, parseInt($('frameTextCol').value.slice(1), 16));
+  }
+
   // center the group at origin
   modelGroup.position.set(-cx, -cy, 0);
 
   // frame camera
-  const r = Math.max(model.modelWidth, model.modelDepth);
-  camera.position.set(r * 0.9, -r * 1.0, r * 0.9);
-  controls.target.set(0, 0, 0);
-  controls.update();
+  if (!keepCamera) {
+    const r = Math.max(model.modelWidth, model.modelDepth);
+    camera.position.set(r * 0.9, -r * 1.0, r * 0.9);
+    controls.target.set(0, 0, 0);
+    controls.update();
+  }
 }
 
 /* ============================================================================
@@ -1167,6 +1258,7 @@ async function exportZip() {
   setStatus('Zipping STL pieces…');
   const zip = new JSZip();
   for (const P of state.model.pieces) {
+    if (!P.pos.length) continue; // clipped away entirely by the shape
     const col = P.id % state.model.nx, row = Math.floor(P.id / state.model.nx);
     zip.file(`piece_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(P));
   }
@@ -1174,6 +1266,7 @@ async function exportZip() {
     const col = R.pid % state.model.nx, row = Math.floor(R.pid / state.model.nx);
     zip.file(`route_red_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(R));
   }
+  if (state.model.frame) zip.file('frame_plate.stl', pieceToBinarySTL(frameMergedMesh(state.model.frame)));
   zip.file('README.txt',
     `TopoPuzzle export\nPieces: ${state.model.nx} x ${state.model.ny}\n` +
     `Model size: ${state.model.modelWidth.toFixed(1)} x ${state.model.modelDepth.toFixed(1)} mm\n` +
@@ -1187,8 +1280,19 @@ function exportOne() {
   download(new Blob([combinedBinarySTL(state.model)], { type: 'model/stl' }), 'topopuzzle_combined.stl');
   setStatus('Downloaded topopuzzle_combined.stl', 'ok');
 }
+function frameMergedMesh(F) {
+  return F.text
+    ? { pos: F.plate.pos.concat(F.text.pos), nrm: F.plate.nrm.concat(F.text.nrm) }
+    : F.plate;
+}
 $('exportZip').addEventListener('click', exportZip);
 $('exportOne').addEventListener('click', exportOne);
+$('exportFrame').addEventListener('click', () => {
+  const F = state.model && state.model.frame;
+  if (!F) return;
+  download(new Blob([pieceToBinarySTL(frameMergedMesh(F))], { type: 'model/stl' }), 'frame_plate.stl');
+  setStatus('Downloaded frame_plate.stl', 'ok');
+});
 
 /* ============================================================================
    BAMBU 4-COLOR 3MF EXPORT
@@ -1199,7 +1303,7 @@ $('exportOne').addEventListener('click', exportOne);
 const WATER_CAP_MM = 0.8; // thickness of the blue water skin in the 3MF
 
 function buildBandSolidMesh(model, pieceId, band) {
-  const { Hv, piece, water, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
+  const { Hv, piece, water, cellShape, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
   const minE = model.minE;
   const zOf = e => baseMM + (e - minE) * zScale;
   const cLo = band === 0 ? 0 : model.zCuts[band - 1];
@@ -1212,7 +1316,7 @@ function buildBandSolidMesh(model, pieceId, band) {
   const topV = (i, j) => Math.max(clamp(rawTop(i, j), cLo, cHi), cLo + MINT);
   const inc = (i, j) => {
     if (i < 0 || j < 0 || i >= W || j >= D) return false;
-    if (piece[j * W + i] !== pieceId) return false;
+    if (piece[j * W + i] !== pieceId || !cellShape[j * W + i]) return false;
     if (band === 0) return true; // band 0 includes the base slab everywhere
     return Math.max(rawTop(i, j), rawTop(i + 1, j), rawTop(i, j + 1), rawTop(i + 1, j + 1)) > cLo + MINT;
   };
@@ -1259,13 +1363,14 @@ function buildBandSolidMesh(model, pieceId, band) {
 /* Thin blue skin over water cells of one piece: bottom = surface − cap depth
    (tapering to zero at the shore), top = terrain surface. */
 function buildWaterCapMesh(model, pieceId) {
-  const { Hv, piece, water, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
+  const { Hv, piece, water, cellShape, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
   const zOf = e => baseMM + (e - model.minE) * zScale;
   const X = i => i * dx, Y = j => modelDepth - j * dy;
   const top = (i, j) => zOf(Hv[j * VW + i]);
   const dep = (i, j) => water[j * VW + i] ? WATER_CAP_MM : 0;
   const bot = (i, j) => top(i, j) - dep(i, j);
   const inc = (i, j) => i >= 0 && j >= 0 && i < W && j < D && piece[j * W + i] === pieceId &&
+    !!cellShape[j * W + i] &&
     (dep(i, j) > 0 || dep(i + 1, j) > 0 || dep(i, j + 1) > 0 || dep(i + 1, j + 1) > 0);
 
   const pos = [];
@@ -1306,6 +1411,211 @@ function buildWaterCapMesh(model, pieceId) {
   return pos;
 }
 
+/* ============================================================================
+   FRAME PLATE — display tray (circle / square / hex) with embossed text.
+   Text is rasterized via canvas 2D (system fonts render Thai natively) and
+   extruded from the pixel mask, so any script works without font libraries.
+   ============================================================================ */
+
+/* Render text to an offscreen canvas; returns {mask: Uint8Array, wPx, hPx}
+   with rows flipped to y-up, or null if nothing was drawn. */
+function rasterizeTextMask(text, wPx, hPx) {
+  const cv = document.createElement('canvas');
+  cv.width = wPx; cv.height = hPx;
+  const ctx = cv.getContext('2d');
+  const fontFor = s => `bold ${s}px 'Leelawadee UI','Noto Sans Thai','Segoe UI',Tahoma,Arial,sans-serif`;
+  let size = Math.round(hPx * 0.62); // leave headroom for Thai tone marks
+  ctx.font = fontFor(size);
+  while (ctx.measureText(text).width > wPx * 0.94 && size > 6) {
+    size = Math.floor(size * 0.93);
+    ctx.font = fontFor(size);
+  }
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, wPx / 2, hPx / 2);
+  const px = ctx.getImageData(0, 0, wPx, hPx).data;
+  const mask = new Uint8Array(wPx * hPx);
+  let any = false;
+  for (let j = 0; j < hPx; j++) {
+    for (let i = 0; i < wPx; i++) {
+      if (px[(j * wPx + i) * 4 + 3] > 128) { mask[(hPx - 1 - j) * wPx + i] = 1; any = true; }
+    }
+  }
+  return any ? { mask, wPx, hPx } : null;
+}
+
+/* Closed solid from a per-cell height grid (h < 0 = empty, bottoms at z=0).
+   Tops/bottoms are run-length merged per row; walls emitted at height steps,
+   facing the lower side. Standard CCW-outward winding (y-up coords). */
+function heightGridMesh(hArr, nx, ny, cell, ox, oy) {
+  const pos = [], nrm = [];
+  const emit = (ax, ay, az, bx, by, bz, cx, cy, cz) => {
+    const ux = bx - ax, uy = by - ay, uz = bz - az;
+    const vx = cx - ax, vy = cy - ay, vz = cz - az;
+    let nxn = uy * vz - uz * vy, nyn = uz * vx - ux * vz, nzn = ux * vy - uy * vx;
+    const L = Math.hypot(nxn, nyn, nzn) || 1; nxn /= L; nyn /= L; nzn /= L;
+    pos.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+    nrm.push(nxn, nyn, nzn, nxn, nyn, nzn, nxn, nyn, nzn);
+  };
+  const H = (i, j) => (i < 0 || j < 0 || i >= nx || j >= ny) ? -1 : hArr[j * nx + i];
+
+  for (let j = 0; j < ny; j++) {
+    const y0 = oy + j * cell, y1 = y0 + cell;
+    let i = 0;
+    while (i < nx) {
+      const h = H(i, j);
+      if (h < 0) { i++; continue; }
+      let i1 = i + 1;
+      while (i1 < nx && H(i1, j) === h) i1++;
+      const x0 = ox + i * cell, x1 = ox + i1 * cell;
+      emit(x0, y0, h, x1, y0, h, x1, y1, h);   // top (+z)
+      emit(x0, y0, h, x1, y1, h, x0, y1, h);
+      emit(x0, y0, 0, x1, y1, 0, x1, y0, 0);   // bottom (−z)
+      emit(x0, y0, 0, x0, y1, 0, x1, y1, 0);
+      i = i1;
+    }
+  }
+  // walls at x boundaries
+  for (let j = 0; j < ny; j++) {
+    const y0 = oy + j * cell, y1 = y0 + cell;
+    for (let i = 0; i <= nx; i++) {
+      const a = Math.max(H(i - 1, j), 0), b = Math.max(H(i, j), 0);
+      if (a === b) continue;
+      const xB = ox + i * cell, lo = Math.min(a, b), hi = Math.max(a, b);
+      if (a < b) { // right cell higher → wall faces −x
+        emit(xB, y0, lo, xB, y0, hi, xB, y1, hi);
+        emit(xB, y0, lo, xB, y1, hi, xB, y1, lo);
+      } else {     // faces +x
+        emit(xB, y0, lo, xB, y1, lo, xB, y1, hi);
+        emit(xB, y0, lo, xB, y1, hi, xB, y0, hi);
+      }
+    }
+  }
+  // walls at y boundaries
+  for (let j = 0; j <= ny; j++) {
+    const yB = oy + j * cell;
+    for (let i = 0; i < nx; i++) {
+      const a = Math.max(H(i, j - 1), 0), b = Math.max(H(i, j), 0);
+      if (a === b) continue;
+      const x0 = ox + i * cell, x1 = x0 + cell, lo = Math.min(a, b), hi = Math.max(a, b);
+      if (a < b) { // upper cell higher → wall faces −y
+        emit(x0, yB, lo, x1, yB, lo, x1, yB, hi);
+        emit(x0, yB, lo, x1, yB, hi, x0, yB, hi);
+      } else {     // faces +y
+        emit(x0, yB, lo, x0, yB, hi, x1, yB, hi);
+        emit(x0, yB, lo, x1, yB, hi, x1, yB, lo);
+      }
+    }
+  }
+  return { pos, nrm };
+}
+
+function buildFrameMesh(modelWidth, modelDepth, style, text, o) {
+  const CELL = 0.5, CLR = 0.3;
+  const FLOOR_T = 1.8;                                 // slab under the puzzle — fixed,
+                                                       // so thickness never pushes into it
+  const RIM_H = o.thick;                               // slider: rim raised above the pocket floor
+  const PLATE_T = FLOOR_T + RIM_H;                     // rim top
+  const POCKET_D = RIM_H;
+  const TEXT_T = Math.min(1, PLATE_T - 0.5);           // inlay depth; text sits flush
+  const MARGIN = o.margin, s3 = Math.sqrt(3);
+  const pw = modelWidth + 2 * CLR, ph = modelDepth + 2 * CLR;
+
+  // pocket is centered on the plate; text lives in the rim below it
+  let halfX, halfY, inside, plateBotY, pocketBotY, halfWidthAt;
+  if (style === 'square') {
+    const s = Math.max(pw, ph) / 2 + MARGIN;
+    halfX = halfY = s; plateBotY = s; pocketBotY = ph / 2;
+    inside = (x, y) => Math.abs(x) <= s && Math.abs(y) <= s;
+    halfWidthAt = () => s;
+  } else if (style === 'circle') {
+    const R = Math.max(pw, ph) / 2 + MARGIN;
+    halfX = halfY = R; plateBotY = R; pocketBotY = ph / 2;
+    inside = (x, y) => x * x + y * y <= R * R;
+    halfWidthAt = y => Math.sqrt(Math.max(0, R * R - y * y));
+  } else { // flat-top regular hexagon
+    const Rp = Math.min(pw / 2, ph / s3);            // pocket hex vertex radius
+    const R = Rp + MARGIN * 2 / s3;                  // outer hex: margin measured edge-to-edge
+    halfX = R; halfY = s3 * R / 2;
+    plateBotY = s3 * R / 2; pocketBotY = s3 * Rp / 2;
+    inside = (x, y) => Math.abs(y) <= s3 * R / 2 && s3 * Math.abs(x) + Math.abs(y) <= s3 * R;
+    halfWidthAt = y => Math.max(0, R - Math.abs(y) / s3);
+  }
+
+  const nx = Math.ceil(2 * halfX / CELL) + 2, ny = Math.ceil(2 * halfY / CELL) + 2;
+  const ox = -nx * CELL / 2, oy = -ny * CELL / 2;
+
+  // text mask: sized by o.textSize, default-centered in the bottom rim,
+  // nudged up/down by o.textPos. On circle plates the mask is sampled through
+  // a polar warp so the text curves along the rim like a coin inscription.
+  let tm = null, tX0 = 0, tY0 = 0, tH = 0, arc = null;
+  if (text) {
+    const gap = plateBotY - pocketBotY;
+    tH = Math.min(o.textSize, Math.max(4, gap - 3)); // keep the band inside the rim
+    if (style === 'circle') {
+      let rMid = pocketBotY + gap / 2 - o.textPos;
+      rMid = clamp(rMid, pocketBotY + tH / 2 + 0.5, plateBotY - tH / 2 - 1.5);
+      arc = { rIn: rMid - tH / 2, rOut: rMid + tH / 2, rMid };
+      const tW = Math.max(10, rMid * 2.4); // arc length budget ≈ 140°
+      tm = rasterizeTextMask(text, Math.round(tW / CELL), Math.round(tH / CELL));
+    } else {
+      let yc = -(pocketBotY + gap / 2) + o.textPos;
+      yc = clamp(yc, -(plateBotY - tH / 2 - 1.5), -(pocketBotY + tH / 2 + 0.5));
+      tY0 = yc - tH / 2;
+      // width from the chord slightly below center — glyph corners rarely
+      // reach the band's outer corners, so this stays readable on hex rims
+      const tW = Math.max(10, 2 * halfWidthAt(Math.abs(yc) + tH / 4) * 0.92);
+      tX0 = -tW / 2;
+      tm = rasterizeTextMask(text, Math.round(tW / CELL), Math.round(tH / CELL));
+    }
+  }
+
+  const pocketInside = shapeInsideFn(style, pw / 2, ph / 2); // pocket matches the print's shape
+  const hPlate = new Float32Array(nx * ny).fill(-1);
+  const hText = tm ? new Float32Array(nx * ny).fill(-1) : null;
+  for (let j = 0; j < ny; j++) {
+    const cy = oy + (j + 0.5) * CELL;
+    for (let i = 0; i < nx; i++) {
+      const cx = ox + (i + 0.5) * CELL;
+      if (!inside(cx, cy)) continue;
+      const inPocket = pocketInside(cx, cy);
+      hPlate[j * nx + i] = inPocket ? PLATE_T - POCKET_D : PLATE_T;
+      if (tm && !inPocket) {
+        let ti, tj;
+        if (arc) { // polar warp: arc length → mask x, radius → mask y
+          const r = Math.hypot(cx, cy);
+          if (r < arc.rIn || r > arc.rOut) continue;
+          const phi = Math.atan2(cx, -cy); // 0 at the bottom of the plate
+          ti = Math.floor(tm.wPx / 2 + (phi * arc.rMid) / CELL);
+          tj = Math.floor((arc.rOut - r) / CELL);
+        } else {
+          ti = Math.floor((cx - tX0) / CELL);
+          tj = Math.floor((cy - tY0) / CELL);
+        }
+        if (ti >= 0 && tj >= 0 && ti < tm.wPx && tj < tm.hPx && tm.mask[tj * tm.wPx + ti]) {
+          // inlay: recess the plate, the text solid fills it flush with the top
+          hPlate[j * nx + i] = PLATE_T - TEXT_T;
+          hText[j * nx + i] = TEXT_T;
+        }
+      }
+    }
+  }
+
+  const plate = heightGridMesh(hPlate, nx, ny, CELL, ox, oy);
+  let textMesh = null;
+  if (hText) {
+    textMesh = heightGridMesh(hText, nx, ny, CELL, ox, oy);
+    for (let k = 2; k < textMesh.pos.length; k += 3) textMesh.pos[k] += PLATE_T - TEXT_T; // fill the recess
+    if (!textMesh.pos.length) textMesh = null;
+  }
+
+  return {
+    plate, text: textMesh, halfX, halfY,
+    // plate-local → model coords: puzzle centered on the plate, pocket floor at z=0
+    tx: modelWidth / 2, ty: modelDepth / 2, tz: -(PLATE_T - POCKET_D)
+  };
+}
+
 const fmtN = v => (Math.round(v * 1000) / 1000).toString();
 
 /* Triangle soup → indexed 3MF <object> XML (vertices deduped at 1 µm). */
@@ -1343,10 +1653,14 @@ async function exportBambu() {
     for (let k = 0; k < 4; k++) {
       res.push(`<base name="band${k + 1}_${bandNames[k]}" displaycolor="${$('col' + k).value.toUpperCase()}FF"/>`);
     }
-    if (model.routeParts) res.push('<base name="route_red" displaycolor="#E5534BFF"/>');
-    if (model.hasWater) res.push(`<base name="water_blue" displaycolor="${WATER_HEX.toUpperCase()}FF"/>`);
+    let nextP = 4, routePindex = -1, waterPindex = -1, platePindex = -1, textPindex = -1;
+    if (model.routeParts) { res.push('<base name="route_red" displaycolor="#E5534BFF"/>'); routePindex = nextP++; }
+    if (model.hasWater) { res.push(`<base name="water_blue" displaycolor="${WATER_HEX.toUpperCase()}FF"/>`); waterPindex = nextP++; }
+    if (model.frame) {
+      res.push(`<base name="plate" displaycolor="${$('frameCol').value.toUpperCase()}FF"/>`); platePindex = nextP++;
+      if (model.frame.text) { res.push(`<base name="plate_text" displaycolor="${$('frameTextCol').value.toUpperCase()}FF"/>`); textPindex = nextP++; }
+    }
     res.push('</basematerials>');
-    const waterPindex = model.routeParts ? 5 : 4;
 
     let nextId = 2;
     const pieceObjs = [];
@@ -1360,7 +1674,7 @@ async function exportBambu() {
       // this piece's segment of the red route inlay (5th material)
       const R = model.routeParts && model.routeParts.find(r => r.pid === P.id);
       if (R) {
-        const xml = meshObjectXML(nextId, R.pos, 4, `r${row}c${col}_route`);
+        const xml = meshObjectXML(nextId, R.pos, routePindex, `r${row}c${col}_route`);
         if (xml) { res.push(xml); comp.push(nextId); nextId++; }
       }
       // this piece's blue water skin
@@ -1368,7 +1682,7 @@ async function exportBambu() {
         const xml = meshObjectXML(nextId, buildWaterCapMesh(model, P.id), waterPindex, `r${row}c${col}_water`);
         if (xml) { res.push(xml); comp.push(nextId); nextId++; }
       }
-      pieceObjs.push({ id: nextId++, comp, P, row, col });
+      if (comp.length) pieceObjs.push({ id: nextId++, comp, P, row, col }); // skip clipped-away pieces
     }
 
     // Piece objects (components) + build items laid out on a grid around plate
@@ -1381,6 +1695,24 @@ async function exportBambu() {
       const tx = 128 + ((po.col - 1) - (model.nx - 1) / 2) * pitchX - po.P.cx;
       const ty = 128 + ((model.ny - 1) / 2 - (po.row - 1)) * pitchY - po.P.cy;
       items.push(`<item objectid="${po.id}" transform="1 0 0 0 1 0 0 0 1 ${fmtN(tx)} ${fmtN(ty)} 0"/>`);
+    }
+
+    // frame plate as its own object (plate + text components), below the grid
+    if (model.frame) {
+      const F = model.frame, comp = [];
+      const pXml = meshObjectXML(nextId, F.plate.pos, platePindex, 'frame_plate');
+      if (pXml) { res.push(pXml); comp.push(nextId); nextId++; }
+      if (F.text) {
+        const tXml = meshObjectXML(nextId, F.text.pos, textPindex, 'frame_text');
+        if (tXml) { res.push(tXml); comp.push(nextId); nextId++; }
+      }
+      if (comp.length) {
+        res.push(`<object id="${nextId}" type="model" name="frame_plate"><components>` +
+          comp.map(cid => `<component objectid="${cid}"/>`).join('') + '</components></object>');
+        const ty = 128 - ((model.ny + 1) / 2) * pitchY - F.halfY;
+        items.push(`<item objectid="${nextId}" transform="1 0 0 0 1 0 0 0 1 128 ${fmtN(ty)} 0"/>`);
+        nextId++;
+      }
     }
 
     const modelXml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
@@ -1435,6 +1767,7 @@ async function generate() {
       widthMM: parseFloat($('width').value),
       baseMM: parseFloat($('base').value),
       routeMode: $('routeMode').value,
+      frameStyle: currentPrintShape(),
       routePath: (() => {
         let path = route.pts.length > 1 ? route.pts
           : gpxLayer ? gpxLayer.getLatLngs().map(ll => [ll.lat, ll.lng]) : null;
@@ -1447,6 +1780,7 @@ async function generate() {
     };
 
     const model = await buildModel(opts, txt => overlay(true, txt));
+    model.frame = buildFrameIfWanted(model);
     state.model = model;
     recolorModel(model);
     showModel(model);
@@ -1459,6 +1793,7 @@ async function generate() {
     $('loStat').textContent = Math.round(model.minE) + ' m';
     $('hiStat').textContent = Math.round(model.maxE) + ' m';
     $('exportZip').disabled = false; $('exportOne').disabled = false; $('exportBambu').disabled = false;
+    $('exportFrame').disabled = !model.frame;
     setStatus(`Done · zoom ${model.zoom} · ${model.nx * model.ny} pieces`, 'ok');
   } catch (e) {
     console.error(e);
@@ -1468,6 +1803,54 @@ async function generate() {
   }
 }
 $('generate').addEventListener('click', generate);
+
+let frameOn = false;
+function currentFrameStyle() { return frameOn ? $('frameStyle').value : 'none'; }
+// terrain clip shape: the frame's shape when a frame is on, else the
+// standalone print-shape choice ('none' = rectangle)
+function currentPrintShape() { return frameOn ? $('frameStyle').value : $('printShape').value; }
+
+function buildFrameIfWanted(model) {
+  const style = currentFrameStyle();
+  if (style === 'none') return null;
+  return buildFrameMesh(model.modelWidth, model.modelDepth, style, $('frameText').value.trim(), {
+    margin: parseFloat($('frameMargin').value),
+    thick: parseFloat($('frameThick').value),
+    textSize: parseFloat($('frameTextSize').value),
+    textPos: parseFloat($('frameTextPos').value),
+  });
+}
+// shape clips the terrain itself → changing it needs a regenerate;
+// text and plate dimensions only affect the plate → rebuild live
+function refreshFrame() {
+  if (!state.model) return;
+  state.model.frame = buildFrameIfWanted(state.model);
+  showModel(state.model, true);
+  $('exportFrame').disabled = !state.model.frame;
+}
+['frameStyle', 'printShape'].forEach(id => $(id).addEventListener('input', () => {
+  if (state.model && !$('generate').disabled) generate();
+}));
+function setFrameTab(on) {
+  if (frameOn === on) return;
+  frameOn = on;
+  $('frameTabOn').classList.toggle('active', on);
+  $('frameTabOff').classList.toggle('active', !on);
+  $('frameOpts').style.display = on ? '' : 'none';
+  $('noFrameOpts').style.display = on ? 'none' : '';
+  if (state.model && !$('generate').disabled) generate(); // shape clips the terrain
+}
+$('frameTabOn').addEventListener('click', () => setFrameTab(true));
+$('frameTabOff').addEventListener('click', () => setFrameTab(false));
+$('frameText').addEventListener('input', refreshFrame);
+// color-only change: re-render meshes, no geometry rebuild needed
+['frameCol', 'frameTextCol'].forEach(id => $(id).addEventListener('input', () => {
+  if (state.model) showModel(state.model, true);
+}));
+bindSlider('frameMargin', 'frameMarginVal', v => v, refreshFrame);
+bindSlider('frameThick', 'frameThickVal', v => (+v).toFixed(1), refreshFrame);
+bindSlider('frameTextSize', 'frameTextSizeVal', v => (+v).toFixed(1), refreshFrame);
+bindSlider('frameTextPos', 'frameTextPosVal', v => (+v).toFixed(1), refreshFrame);
 
 /* ---------- boot ---------- */
 try { initThree(); } catch (e) { console.warn('3D preview unavailable (WebGL):', e); }
