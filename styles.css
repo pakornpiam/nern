@@ -29,7 +29,7 @@
     #sidebar { border-right: none; border-top: 1px solid var(--line); padding: 14px 12px 28px; overflow: visible; }
     #view3d-wrap { height: 50vh; height: 50dvh; border-left: none; border-top: 1px solid var(--line); }
     /* 16px inputs stop iOS Safari from zooming in on focus */
-    input[type=number], input[type=text], select { font-size: 16px; }
+    input[type=number], input[type=text], input[type=email], select { font-size: 16px; }
     button { padding: 10px 14px; }
   }
 
@@ -47,7 +47,7 @@
   label.row:first-child { margin-top: 0; }
   .val { color: var(--text); font-variant-numeric: tabular-nums; float: right; }
   input[type=range] { width: 100%; accent-color: var(--accent); }
-  input[type=number], input[type=text], select {
+  input[type=number], input[type=text], input[type=email], select {
     width: 100%; background: #0e1318; border: 1px solid var(--line); color: var(--text);
     border-radius: 8px; padding: 8px 10px; font-size: 13px; outline: none;
   }
@@ -97,6 +97,23 @@
 
   .hint { font-size: 11px; color: var(--muted); line-height: 1.5; margin-top: 6px; }
   a { color: var(--accent); }
+
+  /* download gate (lead capture) */
+  #gate {
+    position:fixed; inset:0; z-index:700; display:none; place-items:center;
+    background: rgba(10,13,17,.72); backdrop-filter: blur(3px); overflow-y:auto; padding:20px;
+  }
+  #gate.open { display:grid; }
+  .gate-card {
+    background: var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding: 22px 20px; width: 100%; max-width: 360px; color: var(--text);
+  }
+  .gate-pitch { font-size: 13px; color: var(--muted); margin: 0 0 12px; line-height:1.5; }
+  .gate-card input { margin-bottom: 4px; }
+  .gate-err { color: var(--danger); font-size: 12px; min-height: 16px; margin-top: 4px; }
+  .gate-actions { display:flex; gap:8px; margin-top: 6px; }
+  .gate-actions .primary { flex:1; }
+  .gate-links { display:flex; gap:14px; justify-content:center; margin-top:14px; padding-top:12px; border-top:1px solid var(--line); font-size:13px; }
   .legend { display:flex; height:8px; border-radius:4px; overflow:hidden; margin-top:8px;
     background: linear-gradient(90deg,#2c5c8f 0 25%,#3f9e6f 25% 50%,#e3d27a 50% 75%,#f4f4f4 75% 100%); }
   .legend-labels { display:flex; justify-content:space-between; font-size:10px; color:var(--muted); margin-top:3px; }

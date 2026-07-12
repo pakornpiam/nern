@@ -10,6 +10,7 @@
 <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="config.js"></script>
 
 <link rel="stylesheet" href="styles.css" />
 </head>
@@ -166,6 +167,31 @@
     <div class="pane-label">3D preview · drag to orbit</div>
     <canvas id="view3d"></canvas>
     <div id="overlay"><div class="box"><div class="spinner"></div><span id="overlayText">Working…</span></div></div>
+  </div>
+</div>
+
+<!-- download gate: asks name + email once before the first export -->
+<div id="gate">
+  <div class="gate-card">
+    <div class="brand" style="margin-bottom:10px">
+      <div class="logo">△</div>
+      <h1>Almost there!</h1>
+    </div>
+    <p class="gate-pitch">The STL is free — leave your name and email and the download starts right away.</p>
+    <label class="row">Name</label>
+    <input id="gateName" type="text" autocomplete="name" placeholder="Your name" />
+    <label class="row">Email</label>
+    <input id="gateEmail" type="email" autocomplete="email" placeholder="you@example.com" />
+    <div id="gateErr" class="gate-err"></div>
+    <div class="gate-actions">
+      <button id="gateGo" class="primary">Download</button>
+      <button id="gateCancel">Cancel</button>
+    </div>
+    <p class="hint" style="margin-top:10px">We only use this to share TopoPuzzle updates. No spam, ever.</p>
+    <div class="gate-links">
+      <a id="gateBmc" href="#" target="_blank" rel="noopener">☕ Buy me a coffee</a>
+      <a id="gateAd" href="#" target="_blank" rel="noopener">Our sponsor ↗</a>
+    </div>
   </div>
 </div>
 
@@ -1176,14 +1202,63 @@ function frameMergedMesh(F) {
     ? { pos: F.plate.pos.concat(F.text.pos), nrm: F.plate.nrm.concat(F.text.nrm) }
     : F.plate;
 }
-$('exportZip').addEventListener('click', exportZip);
-$('exportOne').addEventListener('click', exportOne);
-$('exportFrame').addEventListener('click', () => {
+/* ============================================================================
+   DOWNLOAD GATE — one-time name/email before the first export.
+   Leads POST to /api/lead (server.py appends them to leads.csv); if the
+   endpoint is unreachable the download proceeds anyway.
+   ============================================================================ */
+// links are configured in config.js (window.TOPO_CONFIG)
+const cfg = window.TOPO_CONFIG || {};
+// open ...?resetlead to forget the stored submission (for testing the gate)
+if (location.search.includes('resetlead')) localStorage.removeItem('tp_lead');
+$('gateBmc').href = cfg.BMC_URL || 'https://buymeacoffee.com/';
+$('gateAd').href = cfg.AD_URL || 'https://example.com/';
+
+let gatePending = null;
+function gateDownload(fn) {
+  return () => {
+    if (localStorage.getItem('tp_lead')) { fn(); return; }
+    gatePending = fn;
+    $('gateErr').textContent = '';
+    $('gate').classList.add('open');
+    $('gateName').focus();
+  };
+}
+async function gateSubmit() {
+  const name = $('gateName').value.trim();
+  const email = $('gateEmail').value.trim();
+  if (!name) { $('gateErr').textContent = 'Please enter your name.'; return; }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { $('gateErr').textContent = 'Please enter a valid email address.'; return; }
+  $('gateGo').disabled = true;
+  try {
+    const r = await fetch('/api/lead', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email })
+    });
+    if (!r.ok) throw new Error('lead endpoint ' + r.status);
+  } catch (e) {
+    console.warn('Lead not saved (static hosting or server down):', e);
+  } finally {
+    $('gateGo').disabled = false;
+  }
+  localStorage.setItem('tp_lead', JSON.stringify({ name, email, at: Date.now() }));
+  $('gate').classList.remove('open');
+  const fn = gatePending; gatePending = null;
+  if (fn) fn();
+}
+$('gateGo').addEventListener('click', gateSubmit);
+$('gateEmail').addEventListener('keydown', e => { if (e.key === 'Enter') gateSubmit(); });
+$('gateCancel').addEventListener('click', () => { gatePending = null; $('gate').classList.remove('open'); });
+
+$('exportZip').addEventListener('click', gateDownload(exportZip));
+$('exportOne').addEventListener('click', gateDownload(exportOne));
+$('exportFrame').addEventListener('click', gateDownload(() => {
   const F = state.model && state.model.frame;
   if (!F) return;
   download(new Blob([pieceToBinarySTL(frameMergedMesh(F))], { type: 'model/stl' }), 'frame_plate.stl');
   setStatus('Downloaded frame_plate.stl', 'ok');
-});
+}));
 
 /* ============================================================================
    BAMBU 4-COLOR 3MF EXPORT
@@ -1632,7 +1707,7 @@ async function exportBambu() {
     overlay(false); btn.disabled = false;
   }
 }
-$('exportBambu').addEventListener('click', exportBambu);
+$('exportBambu').addEventListener('click', gateDownload(exportBambu));
 
 /* ============================================================================
    GENERATE

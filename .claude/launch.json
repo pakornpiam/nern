@@ -4,7 +4,7 @@
     {
       "name": "topopuzzle",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "5177"],
+      "runtimeArgs": ["server.py"],
       "port": 5177
     }
   ]
