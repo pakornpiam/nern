@@ -1,0 +1,399 @@
+/* TopoPuzzle interface translations.
+ *
+ * Loaded before the app's inline script so the dictionary exists by the time
+ * anything paints. Two flat key -> string maps; Thai falls back to English for
+ * any key it is missing, so a half-finished translation degrades gracefully
+ * rather than showing raw keys.
+ *
+ * Strings with runtime values use {name} placeholders — never concatenation,
+ * because Thai word order does not follow English.
+ *
+ * NOT translated by design: STL/3MF filenames and part names (slicers and
+ * filesystems want ASCII), map attribution (legally required as-is), and
+ * place names from Nominatim/OpenStreetMap (whatever the map data carries).
+ */
+(function () {
+  'use strict';
+
+  const en = {
+    /* ---- document + brand ---- */
+    pageTitle: 'TopoPuzzle — 3D-Printable Topographic Puzzles of Anywhere on Earth',
+    tagline: 'Turn any place on Earth into an interlocking, 3D-printable topographic puzzle. Pick a spot, generate the terrain, export STL pieces.',
+
+    /* ---- 1 · Location ---- */
+    g1Title: '1 · Location',
+    searchPlaceholder: 'Search a place (e.g. Mount Fuji)',
+    searchGo: 'Go',
+    hintRecenter: 'Or click the map to recenter. Drag the box handle by moving center + resizing area below.',
+    gpxLoad: 'Load GPX track…',
+    gpxRemove: 'Remove GPX track',
+    hintGpx: 'Import a GPX route (e.g. from gpx.studio) — the puzzle area auto-fits the track.',
+    routeDraw: '✏ Draw route',
+    routeFinish: '✓ Finish route',
+    routeGpsTitle: 'Add your current GPS location as a route point',
+    routeGpsLabel: '📍 GPS',
+    routeFitTitle: 'Fit puzzle area to the route',
+    routeFitLabel: 'Fit area',
+    routeSaveTitle: 'Download route as GPX',
+    routeClearTitle: 'Delete route',
+    routePtPlaceholder: 'Add point: lat, lon (e.g. 35.36, 138.72)',
+    routeAdd: 'Add',
+    hintDrawEdit: 'Draw: click the map to add points, type coordinates above, or 📍 for your GPS location; double-click to finish. Edit: drag a point to move it, click/drag a small midpoint to insert, right-click a point to delete.',
+    lblRouteOnPrint: 'Route on print',
+    optInlay: 'Red inlay — separate printable part',
+    optThrough: 'Full-depth route — removable top-to-bottom piece',
+    optEmboss: 'Raised ridge (~1 mm)',
+    optEngrave: 'Engraved groove (~0.8 mm)',
+    optOff: 'Off',
+    lblRouteTop: 'Route top',
+    optFlush: 'Flush with terrain',
+    optRaised: 'Raised 0.6 mm',
+    lblRoutePieces: 'Route pieces',
+    optSplitPiece: 'Split per puzzle piece',
+    optContinuous: 'One continuous route',
+    hintThroughRoute: 'The 3.2 mm route reaches the print bottom. Its channel is 3.6 mm wide, leaving 0.2 mm clearance on each side for assembly.',
+    lblAreaSize: 'Area size',
+    lblCenterLat: 'Center lat',
+    lblCenterLon: 'Center lon',
+
+    /* ---- 2 · Puzzle ---- */
+    g2Title: '2 · Puzzle',
+    lblPiecesAcross: 'Pieces across',
+    lblPiecesDown: 'Pieces down',
+    lblDetail: 'Detail (grid)',
+    lblVex: 'Vertical exaggeration',
+
+    /* ---- 3 · Print size ---- */
+    g3Title: '3 · Print size',
+    lblWidth: 'Overall width',
+    lblBase: 'Base thickness',
+
+    /* ---- 4 · Colors ---- */
+    g4Title: '4 · Colors (Bambu AMS)',
+    band1: 'Band 1 · low',
+    band2: 'Band 2',
+    band3: 'Band 3',
+    band4: 'Band 4 · peak',
+    hintBands: 'Terrain is split into 4 elevation bands. Each band exports as its own solid with a material assigned, so Bambu Studio maps them to 4 AMS filament slots.',
+
+    /* ---- 5 · Frame plate ---- */
+    g5Title: '5 · Frame plate',
+    tabNoFrame: 'No frame',
+    tabWithFrame: 'With frame',
+    lblFrameShape: 'Frame shape (print + plate)',
+    optCircle: 'Circle',
+    optSquare: 'Square',
+    optHex: 'Hexagon',
+    optRect: 'Rectangle',
+    lblPlateMargin: 'Plate margin',
+    lblRimHeight: 'Rim height (above puzzle base)',
+    lblPlateColor: 'Plate color',
+    lblTextColor: 'Text color',
+    lblPlateText: 'Text on plate (Thai / English)',
+    framePlaceholder: 'e.g. ภูเขาไฟฟูจิ · Mount Fuji',
+    lblTextSize: 'Text size',
+    lblTextPos: 'Text position',
+    hintFrame: "Cuts the puzzle to the frame shape and adds a matching display tray (printed as its own part); the text is inlaid flush in the tray's lower rim.",
+    lblPrintShape: 'Print shape',
+    hintPrintShape: 'Puzzle only, cut to this shape — no display tray.',
+
+    /* ---- actions, stats, panes ---- */
+    btnGenerate: 'Generate terrain',
+    gModel: 'Model',
+    statElev: 'Elevation range',
+    statPiece: 'Piece footprint',
+    statTris: 'Triangles',
+    legendLow: 'low',
+    legendHigh: 'high',
+    btnExportBambu: '⬇ Export Bambu 4-color puzzle (.3mf)',
+    btnExportZip: '⬇ Export puzzle pieces (.zip of STL)',
+    btnExportOne: '⬇ Export single combined STL',
+    btnExportFrame: '⬇ Export frame plate (STL)',
+    hintCredits: 'Elevation: AWS Terrarium terrain tiles. Basemap: OpenStreetMap. Geocoding: Nominatim. All free, no API key.',
+    paneMap: 'Pick location',
+    pane3d: '3D preview · drag to orbit',
+    splitHint: 'Drag to resize · double-click to reset',
+    overlayWorking: 'Working…',
+    layerTopo: 'Topographic',
+    layerStreets: 'Streets',
+
+    /* ---- download gate ---- */
+    gateTitle: 'Almost there!',
+    gatePitch: 'The STL is free — leave your name and email and the download starts right away.',
+    gateName: 'Name',
+    gateNamePlaceholder: 'Your name',
+    gateEmail: 'Email',
+    gateEmailPlaceholder: 'you@example.com',
+    gateGo: 'Download',
+    gateCancel: 'Cancel',
+    gateHint: 'We only use this to share TopoPuzzle updates. No spam, ever.',
+    gateBmc: '☕ Buy me a coffee',
+    gateAd: 'Our sponsor ↗',
+    gateErrName: 'Please enter your name.',
+    gateErrEmail: 'Please enter a valid email address.',
+
+    /* ---- runtime status ---- */
+    stBoot: 'Pick a place, then “Generate terrain”. Default: Mount Fuji.',
+    stSearching: 'Searching…',
+    stFound: 'Found: {place}',
+    stGpxLoaded: 'GPX loaded: {count} points, area {km} km',
+    stGpxRemoved: 'GPX track removed',
+    stBadCoords: 'Enter coordinates as “lat, lon” — e.g. 35.3606, 138.7274',
+    stRoutePoint: 'Route point {n} added at {lat}, {lon}',
+    stGpsFix: 'Getting GPS fix…',
+    stGpsAdded: 'GPS point {n} added (±{acc} m)',
+    stGpsFailed: 'GPS failed: {why}{note}',
+    stAreaFit: 'Area fit to route: {km} km',
+    stRouteDeleted: 'Route deleted',
+    stDownloaded: 'Downloaded {file}',
+    stZipping: 'Zipping STL pieces…',
+    stBambuDone: 'Downloaded .3mf — Bambu Studio will load each color band as a separate AMS filament',
+    stDone: 'Done · zoom {zoom} · {n} pieces',
+
+    /* ---- progress overlay ---- */
+    pgPreparing: 'Preparing…',
+    pgTiles: 'Fetching terrain tiles {done}/{total}…',
+    pgWater: 'Fetching water areas (OSM)…',
+    pgPieces: 'Cutting puzzle pieces…',
+    pgRoute: 'Stamping route…',
+    pgRouteThrough: 'Cutting full-depth route…',
+    pgBambu: 'Building 4-color 3MF…',
+
+    /* ---- errors ---- */
+    errSearchFailed: 'Search failed',
+    errNoResults: 'No results for "{query}"',
+    errBadGpx: 'Not a valid GPX file',
+    errNoGpxPoints: 'No track points found in GPX',
+    errCors: 'Elevation tiles blocked by CORS. Try a different network or a CORS proxy.',
+    errNoGeolocation: 'Geolocation is not supported by this browser',
+    err3mf: '3MF export failed',
+    errGenerate: 'Generation failed',
+    gpsDenied: 'permission denied',
+    gpsUnavailable: 'position unavailable',
+    gpsTimeout: 'timed out',
+    gpsHttpsNote: ' — browsers only allow GPS over HTTPS (or localhost)',
+
+    /* ---- number/unit formats ---- */
+    fmtRange: '{lo}–{hi} m',
+    fmtMeters: '{n} m',
+    fmtPieceSize: '{w}×{h} mm',
+
+    /* ---- README.txt inside the exported zip ----
+       Hard-wrapped by hand; keep lines under ~78 characters. */
+    readmeHead:
+      'TopoPuzzle export\nPieces: {nx} x {ny}\nModel size: {w} x {d} mm\n' +
+      'Print all pieces, then assemble the jigsaw. Tabs interlock by design.\n',
+    readmeThrough:
+      'The route_red_*.stl parts run the full depth of the print. Print them in red\n' +
+      '(or any contrast colour) and press them into the channels; each side has\n' +
+      '0.2 mm of clearance.\n',
+    readmeContinuous:
+      'route_red_continuous.stl spans every piece, so seat it only once the puzzle\n' +
+      'is fully assembled.\n',
+    readmeInlay:
+      'The route_red_*.stl parts are shallow inlays. Print them in red and press\n' +
+      'them into the grooves.\n',
+  };
+
+  /* Thai. Terminology choices worth knowing:
+       route      -> เส้นทาง          piece   -> ชิ้น / ชิ้นส่วน
+       band       -> แถบ              inlay   -> แถบฝัง
+       frame plate-> ถาดกรอบ          terrain -> ภูมิประเทศ
+     Units are written in Thai abbreviations (มม. = mm, กม. = km). */
+  const th = {
+    pageTitle: 'TopoPuzzle — จิ๊กซอว์ภูมิประเทศ 3 มิติ พิมพ์ได้จากทุกที่บนโลก',
+    tagline: 'เปลี่ยนสถานที่ใดก็ได้บนโลกให้เป็นจิ๊กซอว์ภูมิประเทศแบบต่อประกบ พิมพ์ 3 มิติได้ เลือกจุดที่ต้องการ สร้างภูมิประเทศ แล้วส่งออกเป็นชิ้นส่วน STL',
+
+    g1Title: '1 · ตำแหน่ง',
+    searchPlaceholder: 'ค้นหาสถานที่ (เช่น ภูเขาไฟฟูจิ)',
+    searchGo: 'ไป',
+    hintRecenter: 'หรือคลิกบนแผนที่เพื่อย้ายจุดกึ่งกลาง ปรับกรอบได้โดยเลื่อนจุดกึ่งกลางและปรับขนาดพื้นที่ด้านล่าง',
+    gpxLoad: 'โหลดเส้นทาง GPX…',
+    gpxRemove: 'ลบเส้นทาง GPX',
+    hintGpx: 'นำเข้าเส้นทาง GPX (เช่น จาก gpx.studio) — พื้นที่จิ๊กซอว์จะปรับให้พอดีกับเส้นทางโดยอัตโนมัติ',
+    routeDraw: '✏ วาดเส้นทาง',
+    routeFinish: '✓ จบเส้นทาง',
+    routeGpsTitle: 'เพิ่มตำแหน่ง GPS ปัจจุบันเป็นจุดบนเส้นทาง',
+    routeGpsLabel: '📍 GPS',
+    routeFitTitle: 'ปรับพื้นที่จิ๊กซอว์ให้พอดีกับเส้นทาง',
+    routeFitLabel: 'พอดีพื้นที่',
+    routeSaveTitle: 'ดาวน์โหลดเส้นทางเป็นไฟล์ GPX',
+    routeClearTitle: 'ลบเส้นทาง',
+    routePtPlaceholder: 'เพิ่มจุด: lat, lon (เช่น 35.36, 138.72)',
+    routeAdd: 'เพิ่ม',
+    hintDrawEdit: 'วาด: คลิกบนแผนที่เพื่อเพิ่มจุด พิมพ์พิกัดในช่องด้านบน หรือกด 📍 เพื่อใช้ตำแหน่ง GPS ของคุณ ดับเบิลคลิกเพื่อจบ · แก้ไข: ลากจุดเพื่อย้าย คลิกหรือลากจุดกึ่งกลางเล็ก ๆ เพื่อแทรกจุดใหม่ คลิกขวาที่จุดเพื่อลบ',
+    lblRouteOnPrint: 'เส้นทางบนชิ้นงาน',
+    optInlay: 'แถบฝังสีแดง — พิมพ์แยกชิ้น',
+    optThrough: 'เส้นทางทะลุ — ชิ้นถอดออกได้จากบนถึงล่าง',
+    optEmboss: 'สันนูน (~1 มม.)',
+    optEngrave: 'ร่องเซาะ (~0.8 มม.)',
+    optOff: 'ปิด',
+    lblRouteTop: 'ผิวบนของเส้นทาง',
+    optFlush: 'เสมอผิวภูมิประเทศ',
+    optRaised: 'นูนขึ้น 0.6 มม.',
+    lblRoutePieces: 'การแบ่งเส้นทาง',
+    optSplitPiece: 'แยกตามชิ้นจิ๊กซอว์',
+    optContinuous: 'เส้นทางต่อเนื่องชิ้นเดียว',
+    hintThroughRoute: 'เส้นทางกว้าง 3.2 มม. ทะลุถึงก้นชิ้นงาน ร่องรับกว้าง 3.6 มม. เหลือระยะเผื่อข้างละ 0.2 มม. สำหรับการประกอบ',
+    lblAreaSize: 'ขนาดพื้นที่',
+    lblCenterLat: 'ละติจูดกึ่งกลาง',
+    lblCenterLon: 'ลองจิจูดกึ่งกลาง',
+
+    g2Title: '2 · จิ๊กซอว์',
+    lblPiecesAcross: 'จำนวนชิ้นแนวนอน',
+    lblPiecesDown: 'จำนวนชิ้นแนวตั้ง',
+    lblDetail: 'ความละเอียด (กริด)',
+    lblVex: 'อัตราขยายแนวตั้ง',
+
+    g3Title: '3 · ขนาดงานพิมพ์',
+    lblWidth: 'ความกว้างรวม',
+    lblBase: 'ความหนาฐาน',
+
+    g4Title: '4 · สี (Bambu AMS)',
+    band1: 'แถบ 1 · ต่ำสุด',
+    band2: 'แถบ 2',
+    band3: 'แถบ 3',
+    band4: 'แถบ 4 · ยอด',
+    hintBands: 'ภูมิประเทศถูกแบ่งเป็นแถบระดับความสูง 4 แถบ แต่ละแถบส่งออกเป็นชิ้นทึบของตัวเองพร้อมกำหนดวัสดุ Bambu Studio จึงจับคู่กับช่องฟิลาเมนต์ AMS ทั้ง 4 ช่องได้',
+
+    g5Title: '5 · ถาดกรอบ',
+    tabNoFrame: 'ไม่มีกรอบ',
+    tabWithFrame: 'มีกรอบ',
+    lblFrameShape: 'รูปทรงกรอบ (ชิ้นงาน + ถาด)',
+    optCircle: 'วงกลม',
+    optSquare: 'สี่เหลี่ยมจัตุรัส',
+    optHex: 'หกเหลี่ยม',
+    optRect: 'สี่เหลี่ยมผืนผ้า',
+    lblPlateMargin: 'ระยะขอบถาด',
+    lblRimHeight: 'ความสูงขอบ (เหนือฐานจิ๊กซอว์)',
+    lblPlateColor: 'สีถาด',
+    lblTextColor: 'สีตัวอักษร',
+    lblPlateText: 'ข้อความบนถาด (ไทย / อังกฤษ)',
+    framePlaceholder: 'เช่น ภูเขาไฟฟูจิ · Mount Fuji',
+    lblTextSize: 'ขนาดตัวอักษร',
+    lblTextPos: 'ตำแหน่งตัวอักษร',
+    hintFrame: 'ตัดจิ๊กซอว์ตามรูปทรงกรอบ และเพิ่มถาดโชว์ที่เข้าคู่กัน (พิมพ์เป็นชิ้นแยก) ข้อความจะฝังเสมอผิวบนขอบล่างของถาด',
+    lblPrintShape: 'รูปทรงชิ้นงาน',
+    hintPrintShape: 'เฉพาะจิ๊กซอว์ ตัดตามรูปทรงนี้ — ไม่มีถาดโชว์',
+
+    btnGenerate: 'สร้างภูมิประเทศ',
+    gModel: 'โมเดล',
+    statElev: 'ช่วงระดับความสูง',
+    statPiece: 'ขนาดชิ้น',
+    statTris: 'จำนวนสามเหลี่ยม',
+    legendLow: 'ต่ำ',
+    legendHigh: 'สูง',
+    btnExportBambu: '⬇ ส่งออกจิ๊กซอว์ Bambu 4 สี (.3mf)',
+    btnExportZip: '⬇ ส่งออกชิ้นส่วนจิ๊กซอว์ (.zip ของ STL)',
+    btnExportOne: '⬇ ส่งออก STL รวมชิ้นเดียว',
+    btnExportFrame: '⬇ ส่งออกถาดกรอบ (STL)',
+    hintCredits: 'ระดับความสูง: AWS Terrarium terrain tiles · แผนที่ฐาน: OpenStreetMap · ค้นหาสถานที่: Nominatim ทั้งหมดใช้ฟรี ไม่ต้องใช้ API key',
+    paneMap: 'เลือกตำแหน่ง',
+    pane3d: 'ตัวอย่าง 3 มิติ · ลากเพื่อหมุน',
+    splitHint: 'ลากเพื่อปรับขนาด · ดับเบิลคลิกเพื่อคืนค่าเดิม',
+    overlayWorking: 'กำลังทำงาน…',
+    layerTopo: 'แผนที่ภูมิประเทศ',
+    layerStreets: 'แผนที่ถนน',
+
+    gateTitle: 'อีกนิดเดียว!',
+    gatePitch: 'ไฟล์ STL แจกฟรี — กรอกชื่อและอีเมล แล้วดาวน์โหลดจะเริ่มทันที',
+    gateName: 'ชื่อ',
+    gateNamePlaceholder: 'ชื่อของคุณ',
+    gateEmail: 'อีเมล',
+    gateEmailPlaceholder: 'you@example.com',
+    gateGo: 'ดาวน์โหลด',
+    gateCancel: 'ยกเลิก',
+    gateHint: 'เราใช้ข้อมูลนี้เพื่อส่งข่าวอัปเดตของ TopoPuzzle เท่านั้น ไม่มีสแปมแน่นอน',
+    gateBmc: '☕ เลี้ยงกาแฟผู้พัฒนา',
+    gateAd: 'ผู้สนับสนุนของเรา ↗',
+    gateErrName: 'กรุณากรอกชื่อของคุณ',
+    gateErrEmail: 'กรุณากรอกอีเมลให้ถูกต้อง',
+
+    stBoot: 'เลือกสถานที่ แล้วกด “สร้างภูมิประเทศ” ค่าเริ่มต้น: ภูเขาไฟฟูจิ',
+    stSearching: 'กำลังค้นหา…',
+    stFound: 'พบ: {place}',
+    stGpxLoaded: 'โหลด GPX แล้ว: {count} จุด พื้นที่ {km} กม.',
+    stGpxRemoved: 'ลบเส้นทาง GPX แล้ว',
+    stBadCoords: 'กรอกพิกัดในรูปแบบ “lat, lon” เช่น 35.3606, 138.7274',
+    stRoutePoint: 'เพิ่มจุดที่ {n} ของเส้นทางที่ {lat}, {lon}',
+    stGpsFix: 'กำลังหาสัญญาณ GPS…',
+    stGpsAdded: 'เพิ่มจุด GPS ที่ {n} แล้ว (±{acc} ม.)',
+    stGpsFailed: 'GPS ล้มเหลว: {why}{note}',
+    stAreaFit: 'ปรับพื้นที่ให้พอดีกับเส้นทาง: {km} กม.',
+    stRouteDeleted: 'ลบเส้นทางแล้ว',
+    stDownloaded: 'ดาวน์โหลด {file} แล้ว',
+    stZipping: 'กำลังบีบอัดไฟล์ STL…',
+    stBambuDone: 'ดาวน์โหลด .3mf แล้ว — Bambu Studio จะโหลดแต่ละแถบสีเป็นฟิลาเมนต์ AMS แยกช่อง',
+    stDone: 'เสร็จแล้ว · ซูม {zoom} · {n} ชิ้น',
+
+    pgPreparing: 'กำลังเตรียม…',
+    pgTiles: 'กำลังดึงไทล์ภูมิประเทศ {done}/{total}…',
+    pgWater: 'กำลังดึงข้อมูลแหล่งน้ำ (OSM)…',
+    pgPieces: 'กำลังตัดชิ้นจิ๊กซอว์…',
+    pgRoute: 'กำลังปั๊มเส้นทาง…',
+    pgRouteThrough: 'กำลังเจาะเส้นทางทะลุ…',
+    pgBambu: 'กำลังสร้างไฟล์ 3MF 4 สี…',
+
+    errSearchFailed: 'ค้นหาไม่สำเร็จ',
+    errNoResults: 'ไม่พบผลลัพธ์สำหรับ “{query}”',
+    errBadGpx: 'ไฟล์ GPX ไม่ถูกต้อง',
+    errNoGpxPoints: 'ไม่พบจุดเส้นทางในไฟล์ GPX',
+    errCors: 'ไทล์ระดับความสูงถูกบล็อกโดย CORS ลองเปลี่ยนเครือข่ายหรือใช้ CORS proxy',
+    errNoGeolocation: 'เบราว์เซอร์นี้ไม่รองรับการระบุตำแหน่ง',
+    err3mf: 'ส่งออก 3MF ไม่สำเร็จ',
+    errGenerate: 'สร้างภูมิประเทศไม่สำเร็จ',
+    gpsDenied: 'ถูกปฏิเสธสิทธิ์',
+    gpsUnavailable: 'ไม่พบตำแหน่ง',
+    gpsTimeout: 'หมดเวลา',
+    gpsHttpsNote: ' — เบราว์เซอร์อนุญาตให้ใช้ GPS ผ่าน HTTPS (หรือ localhost) เท่านั้น',
+
+    fmtRange: '{lo}–{hi} ม.',
+    fmtMeters: '{n} ม.',
+    fmtPieceSize: '{w}×{h} มม.',
+
+    /* Thai has no word spaces, so these get their own line breaks rather than
+       reusing the English wrapping. */
+    readmeHead:
+      'TopoPuzzle export\nชิ้นส่วน: {nx} x {ny}\nขนาดโมเดล: {w} x {d} มม.\n' +
+      'พิมพ์ทุกชิ้นแล้วนำมาต่อกันเป็นจิ๊กซอว์ เดือยล็อกเข้ากันพอดีตามที่ออกแบบไว้\n',
+    readmeThrough:
+      'ไฟล์ route_red_*.stl เป็นชิ้นเส้นทางที่ทะลุตลอดความหนาของชิ้นงาน\n' +
+      'พิมพ์ด้วยสีแดง (หรือสีที่ตัดกัน) แล้วกดลงในร่อง มีระยะเผื่อข้างละ 0.2 มม.\n',
+    readmeContinuous:
+      'ไฟล์ route_red_continuous.stl พาดยาวข้ามทุกชิ้น จึงควรใส่หลังจากต่อจิ๊กซอว์\n' +
+      'ครบทุกชิ้นแล้วเท่านั้น\n',
+    readmeInlay:
+      'ไฟล์ route_red_*.stl เป็นแถบฝังตื้น พิมพ์ด้วยสีแดงแล้วกดลงในร่อง\n',
+  };
+
+  const I18N = { en, th };
+  let lang = 'en';
+
+  /* Look up a key in the active language, falling back to English, then to the
+     key itself so a missing entry is visible rather than blank. */
+  function t(key, params) {
+    let s = I18N[lang][key];
+    if (s === undefined) s = en[key];
+    if (s === undefined) return key;
+    if (params) s = s.replace(/\{(\w+)\}/g, (m, k) => (k in params ? params[k] : m));
+    return s;
+  }
+
+  /* Fill in every tagged element. Elements carrying data-i18n must contain
+     text only — the slider labels wrap their text in a span for exactly this
+     reason, so their live value span survives. */
+  function applyI18n(root) {
+    const r = root || document;
+    r.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+    r.querySelectorAll('[data-i18n-placeholder]').forEach(el => { el.placeholder = t(el.dataset.i18nPlaceholder); });
+    r.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
+  }
+
+  window.I18N = I18N;
+  window.t = t;
+  window.applyI18n = applyI18n;
+  window.tpLang = () => lang;
+  window.tpSetLangCode = code => { lang = I18N[code] ? code : 'en'; };
+  /* BCP-47 tag for Intl / toLocaleString. */
+  window.tpLocale = () => (lang === 'th' ? 'th-TH' : 'en-US');
+})();

@@ -11,6 +11,7 @@
 <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="config.js"></script>
+<script src="i18n.js"></script>
 
 <link rel="stylesheet" href="styles.css" />
 </head>
@@ -21,172 +22,180 @@
     <div class="brand">
       <div class="logo">△</div>
       <h1>TopoPuzzle</h1>
+      <div class="lang-tabs" id="langTabs">
+        <button id="langEn" class="active" lang="en">EN</button>
+        <button id="langTh" lang="th">ไทย</button>
+      </div>
     </div>
-    <p class="tagline">Turn any place on Earth into an interlocking, 3D-printable topographic puzzle. Pick a spot, generate the terrain, export STL pieces.</p>
+    <p class="tagline" data-i18n="tagline">Turn any place on Earth into an interlocking, 3D-printable topographic puzzle. Pick a spot, generate the terrain, export STL pieces.</p>
 
     <div class="group">
-      <h2>1 · Location</h2>
+      <h2 data-i18n="g1Title">1 · Location</h2>
       <div class="search-row">
-        <input id="search" type="text" placeholder="Search a place (e.g. Mount Fuji)" />
-        <button id="searchBtn">Go</button>
+        <input id="search" type="text" data-i18n-placeholder="searchPlaceholder" placeholder="Search a place (e.g. Mount Fuji)" />
+        <button id="searchBtn" data-i18n="searchGo">Go</button>
       </div>
-      <div class="hint">Or click the map to recenter. Drag the box handle by moving center + resizing area below.</div>
+      <div class="hint" data-i18n="hintRecenter">Or click the map to recenter. Drag the box handle by moving center + resizing area below.</div>
       <div class="search-row" style="margin-top:8px">
         <input id="gpxFile" type="file" accept=".gpx" style="display:none" />
-        <button id="gpxBtn" style="flex:1">Load GPX track…</button>
-        <button id="gpxClear" style="display:none" title="Remove GPX track">✕</button>
+        <button id="gpxBtn" style="flex:1" data-i18n="gpxLoad">Load GPX track…</button>
+        <button id="gpxClear" style="display:none" data-i18n-title="gpxRemove" title="Remove GPX track">✕</button>
       </div>
-      <div class="hint">Import a GPX route (e.g. from gpx.studio) — the puzzle area auto-fits the track.</div>
+      <div class="hint" data-i18n="hintGpx">Import a GPX route (e.g. from gpx.studio) — the puzzle area auto-fits the track.</div>
       <div class="search-row" style="margin-top:8px">
         <button id="routeBtn" style="flex:1">✏ Draw route</button>
-        <button id="routeGps" title="Add your current GPS location as a route point">📍 GPS</button>
-        <button id="routeFit" style="display:none" title="Fit puzzle area to the route">Fit area</button>
-        <button id="routeSave" style="display:none" title="Download route as GPX">GPX</button>
-        <button id="routeClear" style="display:none" title="Delete route">✕</button>
+        <button id="routeGps" data-i18n-title="routeGpsTitle" data-i18n="routeGpsLabel" title="Add your current GPS location as a route point">📍 GPS</button>
+        <button id="routeFit" style="display:none" data-i18n-title="routeFitTitle" data-i18n="routeFitLabel" title="Fit puzzle area to the route">Fit area</button>
+        <button id="routeSave" style="display:none" data-i18n-title="routeSaveTitle" title="Download route as GPX">GPX</button>
+        <button id="routeClear" style="display:none" data-i18n-title="routeClearTitle" title="Delete route">✕</button>
       </div>
       <div class="search-row" style="margin-top:8px">
-        <input id="routePt" type="text" placeholder="Add point: lat, lon (e.g. 35.36, 138.72)" />
-        <button id="routeAdd">Add</button>
+        <input id="routePt" type="text" data-i18n-placeholder="routePtPlaceholder" placeholder="Add point: lat, lon (e.g. 35.36, 138.72)" />
+        <button id="routeAdd" data-i18n="routeAdd">Add</button>
       </div>
-      <div class="hint">Draw: click the map to add points, type coordinates above, or 📍 for your GPS location; double-click to finish. Edit: drag a point to move it, click/drag a small midpoint to insert, right-click a point to delete.</div>
-      <label class="row" style="margin-top:8px">Route on print</label>
+      <div class="hint" data-i18n="hintDrawEdit">Draw: click the map to add points, type coordinates above, or 📍 for your GPS location; double-click to finish. Edit: drag a point to move it, click/drag a small midpoint to insert, right-click a point to delete.</div>
+      <label class="row" style="margin-top:8px" data-i18n="lblRouteOnPrint">Route on print</label>
       <select id="routeMode">
-        <option value="inlay" selected>Red inlay — separate printable part</option>
-        <option value="through">Full-depth route — removable top-to-bottom piece</option>
-        <option value="emboss">Raised ridge (~1 mm)</option>
-        <option value="engrave">Engraved groove (~0.8 mm)</option>
-        <option value="off">Off</option>
+        <option value="inlay" selected data-i18n="optInlay">Red inlay — separate printable part</option>
+        <option value="through" data-i18n="optThrough">Full-depth route — removable top-to-bottom piece</option>
+        <option value="emboss" data-i18n="optEmboss">Raised ridge (~1 mm)</option>
+        <option value="engrave" data-i18n="optEngrave">Engraved groove (~0.8 mm)</option>
+        <option value="off" data-i18n="optOff">Off</option>
       </select>
       <div id="throughRouteOpts" style="display:none">
         <div class="two-col" style="margin-top:8px">
           <div>
-            <label class="row" style="margin:0 0 4px">Route top</label>
+            <label class="row" style="margin:0 0 4px" data-i18n="lblRouteTop">Route top</label>
             <select id="routeTop">
-              <option value="flush" selected>Flush with terrain</option>
-              <option value="raised">Raised 0.6 mm</option>
+              <option value="flush" selected data-i18n="optFlush">Flush with terrain</option>
+              <option value="raised" data-i18n="optRaised">Raised 0.6 mm</option>
             </select>
           </div>
           <div>
-            <label class="row" style="margin:0 0 4px">Route pieces</label>
+            <label class="row" style="margin:0 0 4px" data-i18n="lblRoutePieces">Route pieces</label>
             <select id="routeJoin">
-              <option value="piece" selected>Split per puzzle piece</option>
-              <option value="continuous">One continuous route</option>
+              <option value="piece" selected data-i18n="optSplitPiece">Split per puzzle piece</option>
+              <option value="continuous" data-i18n="optContinuous">One continuous route</option>
             </select>
           </div>
         </div>
-        <div class="hint">The 3.2 mm route reaches the print bottom. Its channel is 3.6 mm wide, leaving 0.2 mm clearance on each side for assembly.</div>
+        <div class="hint" data-i18n="hintThroughRoute">The 3.2 mm route reaches the print bottom. Its channel is 3.6 mm wide, leaving 0.2 mm clearance on each side for assembly.</div>
       </div>
-      <label class="row">Area size <span class="val"><span id="areaVal">24</span> km</span></label>
+      <label class="row"><span data-i18n="lblAreaSize">Area size</span> <span class="val"><span id="areaVal">24</span> km</span></label>
       <input id="area" type="range" min="2" max="120" value="24" step="1" />
       <div class="two-col" style="margin-top:8px">
-        <div><label class="row" style="margin:0 0 4px">Center lat</label><input id="lat" type="number" step="0.0001" value="35.3606" /></div>
-        <div><label class="row" style="margin:0 0 4px">Center lon</label><input id="lon" type="number" step="0.0001" value="138.7274" /></div>
+        <div><label class="row" style="margin:0 0 4px" data-i18n="lblCenterLat">Center lat</label><input id="lat" type="number" step="0.0001" value="35.3606" /></div>
+        <div><label class="row" style="margin:0 0 4px" data-i18n="lblCenterLon">Center lon</label><input id="lon" type="number" step="0.0001" value="138.7274" /></div>
       </div>
     </div>
 
     <div class="group">
-      <h2>2 · Puzzle</h2>
+      <h2 data-i18n="g2Title">2 · Puzzle</h2>
       <div class="two-col">
-        <div><label class="row" style="margin:0 0 4px">Pieces across</label><input id="nx" type="number" min="1" max="8" value="3" /></div>
-        <div><label class="row" style="margin:0 0 4px">Pieces down</label><input id="ny" type="number" min="1" max="8" value="3" /></div>
+        <div><label class="row" style="margin:0 0 4px" data-i18n="lblPiecesAcross">Pieces across</label><input id="nx" type="number" min="1" max="8" value="3" /></div>
+        <div><label class="row" style="margin:0 0 4px" data-i18n="lblPiecesDown">Pieces down</label><input id="ny" type="number" min="1" max="8" value="3" /></div>
       </div>
-      <label class="row">Detail (grid) <span class="val"><span id="resVal">140</span>²</span></label>
+      <label class="row"><span data-i18n="lblDetail">Detail (grid)</span> <span class="val"><span id="resVal">140</span>²</span></label>
       <input id="res" type="range" min="60" max="240" value="140" step="10" />
-      <label class="row">Vertical exaggeration <span class="val">×<span id="vexVal">1.6</span></span></label>
+      <label class="row"><span data-i18n="lblVex">Vertical exaggeration</span> <span class="val">×<span id="vexVal">1.6</span></span></label>
       <input id="vex" type="range" min="1" max="6" value="1.6" step="0.1" />
     </div>
 
     <div class="group">
-      <h2>3 · Print size</h2>
-      <label class="row">Overall width <span class="val"><span id="widthVal">180</span> mm</span></label>
+      <h2 data-i18n="g3Title">3 · Print size</h2>
+      <label class="row"><span data-i18n="lblWidth">Overall width</span> <span class="val"><span id="widthVal">180</span> mm</span></label>
       <input id="width" type="range" min="60" max="300" value="180" step="5" />
-      <label class="row">Base thickness <span class="val"><span id="baseVal">3</span> mm</span></label>
+      <label class="row"><span data-i18n="lblBase">Base thickness</span> <span class="val"><span id="baseVal">3</span> mm</span></label>
       <input id="base" type="range" min="1" max="10" value="3" step="0.5" />
     </div>
 
     <div class="group">
-      <h2>4 · Colors (Bambu AMS)</h2>
+      <h2 data-i18n="g4Title">4 · Colors (Bambu AMS)</h2>
       <div class="color-grid">
-        <label><input id="col0" type="color" value="#2c5c8f" /><span><b>Band 1 · low</b><span class="band-range" id="bandR0">—</span></span></label>
-        <label><input id="col1" type="color" value="#3f9e6f" /><span><b>Band 2</b><span class="band-range" id="bandR1">—</span></span></label>
-        <label><input id="col2" type="color" value="#e3d27a" /><span><b>Band 3</b><span class="band-range" id="bandR2">—</span></span></label>
-        <label><input id="col3" type="color" value="#f4f4f4" /><span><b>Band 4 · peak</b><span class="band-range" id="bandR3">—</span></span></label>
+        <label><input id="col0" type="color" value="#2c5c8f" /><span><b data-i18n="band1">Band 1 · low</b><span class="band-range" id="bandR0">—</span></span></label>
+        <label><input id="col1" type="color" value="#3f9e6f" /><span><b data-i18n="band2">Band 2</b><span class="band-range" id="bandR1">—</span></span></label>
+        <label><input id="col2" type="color" value="#e3d27a" /><span><b data-i18n="band3">Band 3</b><span class="band-range" id="bandR2">—</span></span></label>
+        <label><input id="col3" type="color" value="#f4f4f4" /><span><b data-i18n="band4">Band 4 · peak</b><span class="band-range" id="bandR3">—</span></span></label>
       </div>
-      <div class="hint">Terrain is split into 4 elevation bands. Each band exports as its own solid with a material assigned, so Bambu Studio maps them to 4 AMS filament slots.</div>
+      <div class="hint" data-i18n="hintBands">Terrain is split into 4 elevation bands. Each band exports as its own solid with a material assigned, so Bambu Studio maps them to 4 AMS filament slots.</div>
     </div>
 
     <div class="group">
-      <h2>5 · Frame plate</h2>
+      <h2 data-i18n="g5Title">5 · Frame plate</h2>
       <div class="tabs">
-        <button id="frameTabOff" class="active">No frame</button>
-        <button id="frameTabOn">With frame</button>
+        <button id="frameTabOff" class="active" data-i18n="tabNoFrame">No frame</button>
+        <button id="frameTabOn" data-i18n="tabWithFrame">With frame</button>
       </div>
       <div id="frameOpts" style="display:none">
-        <label class="row" style="margin-top:0">Frame shape (print + plate)</label>
+        <label class="row" style="margin-top:0" data-i18n="lblFrameShape">Frame shape (print + plate)</label>
         <select id="frameStyle">
-          <option value="circle" selected>Circle</option>
-          <option value="square">Square</option>
-          <option value="hex">Hexagon</option>
+          <option value="circle" selected data-i18n="optCircle">Circle</option>
+          <option value="square" data-i18n="optSquare">Square</option>
+          <option value="hex" data-i18n="optHex">Hexagon</option>
         </select>
-        <label class="row">Plate margin <span class="val"><span id="frameMarginVal">14</span> mm</span></label>
+        <label class="row"><span data-i18n="lblPlateMargin">Plate margin</span> <span class="val"><span id="frameMarginVal">14</span> mm</span></label>
         <input id="frameMargin" type="range" min="4" max="50" value="14" step="1" />
-        <label class="row">Rim height (above puzzle base) <span class="val"><span id="frameThickVal">2</span> mm</span></label>
+        <label class="row"><span data-i18n="lblRimHeight">Rim height (above puzzle base)</span> <span class="val"><span id="frameThickVal">2</span> mm</span></label>
         <input id="frameThick" type="range" min="0.5" max="15" value="2" step="0.5" />
         <div class="color-grid" style="margin-top:8px">
-          <label><input id="frameCol" type="color" value="#9aa7b3" /><span><b>Plate color</b></span></label>
-          <label><input id="frameTextCol" type="color" value="#111111" /><span><b>Text color</b></span></label>
+          <label><input id="frameCol" type="color" value="#9aa7b3" /><span><b data-i18n="lblPlateColor">Plate color</b></span></label>
+          <label><input id="frameTextCol" type="color" value="#111111" /><span><b data-i18n="lblTextColor">Text color</b></span></label>
         </div>
-        <label class="row" style="margin-top:8px">Text on plate (Thai / English)</label>
-        <input id="frameText" type="text" placeholder="e.g. ภูเขาไฟฟูจิ · Mount Fuji" />
-        <label class="row">Text size <span class="val"><span id="frameTextSizeVal">10</span> mm</span></label>
+        <label class="row" style="margin-top:8px" data-i18n="lblPlateText">Text on plate (Thai / English)</label>
+        <input id="frameText" type="text" data-i18n-placeholder="framePlaceholder" placeholder="e.g. ภูเขาไฟฟูจิ · Mount Fuji" />
+        <label class="row"><span data-i18n="lblTextSize">Text size</span> <span class="val"><span id="frameTextSizeVal">10</span> mm</span></label>
         <input id="frameTextSize" type="range" min="5" max="30" value="10" step="0.5" />
-        <label class="row">Text position <span class="val"><span id="frameTextPosVal">0</span> mm</span></label>
+        <label class="row"><span data-i18n="lblTextPos">Text position</span> <span class="val"><span id="frameTextPosVal">0</span> mm</span></label>
         <input id="frameTextPos" type="range" min="-20" max="20" value="0" step="0.5" />
-        <div class="hint">Cuts the puzzle to the frame shape and adds a matching display tray (printed as its own part); the text is inlaid flush in the tray's lower rim.</div>
+        <div class="hint" data-i18n="hintFrame">Cuts the puzzle to the frame shape and adds a matching display tray (printed as its own part); the text is inlaid flush in the tray's lower rim.</div>
       </div>
       <div id="noFrameOpts">
-        <label class="row" style="margin-top:0">Print shape</label>
+        <label class="row" style="margin-top:0" data-i18n="lblPrintShape">Print shape</label>
         <select id="printShape">
-          <option value="none" selected>Rectangle</option>
-          <option value="circle">Circle</option>
-          <option value="square">Square</option>
-          <option value="hex">Hexagon</option>
+          <option value="none" selected data-i18n="optRect">Rectangle</option>
+          <option value="circle" data-i18n="optCircle">Circle</option>
+          <option value="square" data-i18n="optSquare">Square</option>
+          <option value="hex" data-i18n="optHex">Hexagon</option>
         </select>
-        <div class="hint">Puzzle only, cut to this shape — no display tray.</div>
+        <div class="hint" data-i18n="hintPrintShape">Puzzle only, cut to this shape — no display tray.</div>
       </div>
     </div>
 
-    <button id="generate" class="primary">Generate terrain</button>
+    <button id="generate" class="primary" data-i18n="btnGenerate">Generate terrain</button>
 
     <div class="group" style="margin-top:12px">
-      <h2>Model</h2>
-      <div class="stat"><span>Elevation range</span><b id="elevStat">—</b></div>
-      <div class="stat"><span>Piece footprint</span><b id="pieceStat">—</b></div>
-      <div class="stat"><span>Triangles</span><b id="triStat">—</b></div>
+      <h2 data-i18n="gModel">Model</h2>
+      <div class="stat"><span data-i18n="statElev">Elevation range</span><b id="elevStat">—</b></div>
+      <div class="stat"><span data-i18n="statPiece">Piece footprint</span><b id="pieceStat">—</b></div>
+      <div class="stat"><span data-i18n="statTris">Triangles</span><b id="triStat">—</b></div>
       <div class="legend" id="legend"></div>
-      <div class="legend-labels"><span id="loStat">low</span><span id="hiStat">high</span></div>
+      <div class="legend-labels"><span id="loStat" data-i18n="legendLow">low</span><span id="hiStat" data-i18n="legendHigh">high</span></div>
     </div>
 
-    <button id="exportBambu" class="ghost" disabled>⬇ Export Bambu 4-color puzzle (.3mf)</button>
-    <button id="exportZip" class="ghost" disabled>⬇ Export puzzle pieces (.zip of STL)</button>
-    <button id="exportOne" class="ghost" disabled>⬇ Export single combined STL</button>
-    <button id="exportFrame" class="ghost" disabled>⬇ Export frame plate (STL)</button>
+    <button id="exportBambu" class="ghost" disabled data-i18n="btnExportBambu">⬇ Export Bambu 4-color puzzle (.3mf)</button>
+    <button id="exportZip" class="ghost" disabled data-i18n="btnExportZip">⬇ Export puzzle pieces (.zip of STL)</button>
+    <button id="exportOne" class="ghost" disabled data-i18n="btnExportOne">⬇ Export single combined STL</button>
+    <button id="exportFrame" class="ghost" disabled data-i18n="btnExportFrame">⬇ Export frame plate (STL)</button>
 
     <div id="status"></div>
-    <p class="hint" style="margin-top:16px">Elevation: AWS Terrarium terrain tiles. Basemap: OpenStreetMap. Geocoding: Nominatim. All free, no API key.</p>
+    <p class="hint" style="margin-top:16px" data-i18n="hintCredits">Elevation: AWS Terrarium terrain tiles. Basemap: OpenStreetMap. Geocoding: Nominatim. All free, no API key.</p>
   </aside>
+
+  <div id="splitA" class="splitter" role="separator" tabindex="0" data-i18n-title="splitHint"></div>
 
   <!-- ===================== MAP ===================== -->
   <div id="map-wrap">
-    <div class="pane-label">Pick location</div>
+    <div class="pane-label" data-i18n="paneMap">Pick location</div>
     <div id="map"></div>
   </div>
 
+  <div id="splitB" class="splitter" role="separator" tabindex="0" data-i18n-title="splitHint"></div>
+
   <!-- ===================== 3D ===================== -->
   <div id="view3d-wrap">
-    <div class="pane-label">3D preview · drag to orbit</div>
+    <div class="pane-label" data-i18n="pane3d">3D preview · drag to orbit</div>
     <canvas id="view3d"></canvas>
-    <div id="overlay"><div class="box"><div class="spinner"></div><span id="overlayText">Working…</span></div></div>
+    <div id="overlay"><div class="box"><div class="spinner"></div><span id="overlayText" data-i18n="overlayWorking">Working…</span></div></div>
   </div>
 </div>
 
@@ -195,22 +204,22 @@
   <div class="gate-card">
     <div class="brand" style="margin-bottom:10px">
       <div class="logo">△</div>
-      <h1>Almost there!</h1>
+      <h1 data-i18n="gateTitle">Almost there!</h1>
     </div>
-    <p class="gate-pitch">The STL is free — leave your name and email and the download starts right away.</p>
-    <label class="row">Name</label>
-    <input id="gateName" type="text" autocomplete="name" placeholder="Your name" />
-    <label class="row">Email</label>
-    <input id="gateEmail" type="email" autocomplete="email" placeholder="you@example.com" />
+    <p class="gate-pitch" data-i18n="gatePitch">The STL is free — leave your name and email and the download starts right away.</p>
+    <label class="row" data-i18n="gateName">Name</label>
+    <input id="gateName" type="text" autocomplete="name" data-i18n-placeholder="gateNamePlaceholder" placeholder="Your name" />
+    <label class="row" data-i18n="gateEmail">Email</label>
+    <input id="gateEmail" type="email" autocomplete="email" data-i18n-placeholder="gateEmailPlaceholder" placeholder="you@example.com" />
     <div id="gateErr" class="gate-err"></div>
     <div class="gate-actions">
-      <button id="gateGo" class="primary">Download</button>
-      <button id="gateCancel">Cancel</button>
+      <button id="gateGo" class="primary" data-i18n="gateGo">Download</button>
+      <button id="gateCancel" data-i18n="gateCancel">Cancel</button>
     </div>
-    <p class="hint" style="margin-top:10px">We only use this to share TopoPuzzle updates. No spam, ever.</p>
+    <p class="hint" style="margin-top:10px" data-i18n="gateHint">We only use this to share TopoPuzzle updates. No spam, ever.</p>
     <div class="gate-links">
-      <a id="gateBmc" href="#" target="_blank" rel="noopener">☕ Buy me a coffee</a>
-      <a id="gateAd" href="#" target="_blank" rel="noopener">Our sponsor ↗</a>
+      <a id="gateBmc" href="#" target="_blank" rel="noopener" data-i18n="gateBmc">☕ Buy me a coffee</a>
+      <a id="gateAd" href="#" target="_blank" rel="noopener" data-i18n="gateAd">Our sponsor ↗</a>
     </div>
   </div>
 </div>
@@ -245,7 +254,19 @@ const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png
   maxZoom: 18, attribution: '© OpenStreetMap'
 });
 topoLayer.addTo(map);
-L.control.layers({ 'Topographic': topoLayer, 'Streets': osmLayer }).addTo(map);
+// Leaflet bakes layer names in at construction, so a language switch has to
+// rebuild the control. The attribution text stays English — it is a licence.
+let layerControl = null;
+function refreshLayerControl() {
+  // Removing the control leaves the layers themselves on the map, so whichever
+  // basemap the user picked stays selected across a language switch.
+  if (layerControl) map.removeControl(layerControl);
+  layerControl = L.control.layers({
+    [t('layerTopo')]: topoLayer,
+    [t('layerStreets')]: osmLayer,
+  }).addTo(map);
+}
+refreshLayerControl();
 
 let boxRect = null;
 function boundsFromCenter(lat, lon, km) {
@@ -283,22 +304,22 @@ $('lon').addEventListener('change', syncCenterFromInputs);
 async function geocode(q) {
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`;
   const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
-  if (!r.ok) throw new Error('Search failed');
+  if (!r.ok) throw new Error(t('errSearchFailed'));
   const j = await r.json();
-  if (!j.length) throw new Error('No results for "' + q + '"');
+  if (!j.length) throw new Error(t('errNoResults', { query: q }));
   return { lat: parseFloat(j[0].lat), lon: parseFloat(j[0].lon), name: j[0].display_name };
 }
 async function doSearch() {
   const q = $('search').value.trim();
   if (!q) return;
-  setStatus('Searching…');
+  setStatusKey('stSearching');
   try {
     const g = await geocode(q);
     state.center.lat = +g.lat.toFixed(4);
     state.center.lon = +g.lon.toFixed(4);
     $('lat').value = state.center.lat; $('lon').value = state.center.lon;
     drawBox(); map.setView([g.lat, g.lon], zoomForKm(state.areaKm));
-    setStatus('Found: ' + g.name.split(',').slice(0, 2).join(','), 'ok');
+    setStatusKey('stFound', { place: g.name.split(',').slice(0, 2).join(',') }, 'ok');
   } catch (e) { setStatus(e.message, 'err'); }
 }
 $('searchBtn').addEventListener('click', doSearch);
@@ -328,23 +349,23 @@ $('gpxFile').addEventListener('change', async e => {
   if (!f) return;
   try {
     const xml = new DOMParser().parseFromString(await f.text(), 'application/xml');
-    if (xml.querySelector('parsererror')) throw new Error('Not a valid GPX file');
+    if (xml.querySelector('parsererror')) throw new Error(t('errBadGpx'));
     const pts = [...xml.querySelectorAll('trkpt, rtept, wpt')]
       .map(p => [parseFloat(p.getAttribute('lat')), parseFloat(p.getAttribute('lon'))])
       .filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
-    if (!pts.length) throw new Error('No track points found in GPX');
+    if (!pts.length) throw new Error(t('errNoGpxPoints'));
     if (gpxLayer) map.removeLayer(gpxLayer);
     gpxLayer = L.polyline(pts, { color: '#f2a65a', weight: 3, opacity: 0.9 }).addTo(map);
     const km = fitAreaToBounds(gpxLayer.getBounds());
     $('gpxClear').style.display = '';
-    setStatus(`GPX loaded: ${pts.length} points, area ${km} km`, 'ok');
+    setStatusKey('stGpxLoaded', { count: pts.length, km }, 'ok');
   } catch (err) { setStatus(err.message, 'err'); }
   e.target.value = '';
 });
 $('gpxClear').addEventListener('click', () => {
   if (gpxLayer) { map.removeLayer(gpxLayer); gpxLayer = null; }
   $('gpxClear').style.display = 'none';
-  setStatus('GPX track removed');
+  setStatusKey('stGpxRemoved');
 });
 
 /* ---------- Route drawing / editing ---------- */
@@ -392,9 +413,14 @@ function redrawRoute() {
   }
 }
 
+// The label depends on drawing state, so it is set here rather than by a
+// data-i18n attribute — applyI18n would otherwise stomp "Finish" back to "Draw".
+function refreshRouteBtn() {
+  $('routeBtn').textContent = t(route.drawing ? 'routeFinish' : 'routeDraw');
+}
 function setDrawing(on) {
   route.drawing = on;
-  $('routeBtn').textContent = on ? '✓ Finish route' : '✏ Draw route';
+  refreshRouteBtn();
   $('routeBtn').style.borderColor = on ? 'var(--accent)' : '';
   map.getContainer().style.cursor = on ? 'crosshair' : '';
   if (on) map.doubleClickZoom.disable(); else map.doubleClickZoom.enable();
@@ -413,7 +439,7 @@ function addRoutePointManual() {
   if (!raw) return;
   const m = raw.split(/[,;\s]+/).map(parseFloat).filter(Number.isFinite);
   if (m.length !== 2 || Math.abs(m[0]) > 90 || Math.abs(m[1]) > 180) {
-    setStatus('Enter coordinates as “lat, lon” — e.g. 35.3606, 138.7274', 'err');
+    setStatusKey('stBadCoords', null, 'err');
     return;
   }
   const [la, lo] = m;
@@ -422,36 +448,36 @@ function addRoutePointManual() {
   map.panTo([la, lo]);
   $('routePt').value = '';
   $('routePt').focus(); // ready for the next point
-  setStatus(`Route point ${route.pts.length} added at ${la}, ${lo}`, 'ok');
+  setStatusKey('stRoutePoint', { n: route.pts.length, lat: la, lon: lo }, 'ok');
 }
 $('routeAdd').addEventListener('click', addRoutePointManual);
 $('routePt').addEventListener('keydown', e => { if (e.key === 'Enter') addRoutePointManual(); });
 
 $('routeGps').addEventListener('click', () => {
-  if (!navigator.geolocation) { setStatus('Geolocation is not supported by this browser', 'err'); return; }
-  setStatus('Getting GPS fix…');
+  if (!navigator.geolocation) { setStatusKey('errNoGeolocation', null, 'err'); return; }
+  setStatusKey('stGpsFix');
   navigator.geolocation.getCurrentPosition(pos => {
     const la = +pos.coords.latitude.toFixed(6), lo = +pos.coords.longitude.toFixed(6);
     route.pts.push([la, lo]);
     redrawRoute(); updateRouteButtons();
     map.setView([la, lo], Math.max(map.getZoom(), 14));
-    setStatus(`GPS point ${route.pts.length} added (±${Math.round(pos.coords.accuracy)} m)`, 'ok');
+    setStatusKey('stGpsAdded', { n: route.pts.length, acc: Math.round(pos.coords.accuracy) }, 'ok');
   }, err => {
-    const why = err.code === 1 ? 'permission denied' : err.code === 2 ? 'position unavailable' : 'timed out';
-    const httpsNote = location.protocol === 'http:' && !['localhost', '127.0.0.1'].includes(location.hostname)
-      ? ' — browsers only allow GPS over HTTPS (or localhost)' : '';
-    setStatus('GPS failed: ' + why + httpsNote, 'err');
+    const why = t(err.code === 1 ? 'gpsDenied' : err.code === 2 ? 'gpsUnavailable' : 'gpsTimeout');
+    const note = location.protocol === 'http:' && !['localhost', '127.0.0.1'].includes(location.hostname)
+      ? t('gpsHttpsNote') : '';
+    setStatusKey('stGpsFailed', { why, note }, 'err');
   }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 });
 });
 
 $('routeFit').addEventListener('click', () => {
   const km = fitAreaToBounds(L.latLngBounds(route.pts));
-  setStatus(`Area fit to route: ${km} km`, 'ok');
+  setStatusKey('stAreaFit', { km }, 'ok');
 });
 $('routeClear').addEventListener('click', () => {
   route.pts = []; route.line = null; route.layer.clearLayers();
   setDrawing(false); updateRouteButtons();
-  setStatus('Route deleted');
+  setStatusKey('stRouteDeleted');
 });
 $('routeSave').addEventListener('click', () => {
   const seg = route.pts.map(p => `<trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"/>`).join('');
@@ -459,7 +485,7 @@ $('routeSave').addEventListener('click', () => {
     '<gpx version="1.1" creator="TopoPuzzle" xmlns="http://www.topografix.com/GPX/1/1">' +
     `<trk><name>TopoPuzzle route</name><trkseg>${seg}</trkseg></trk></gpx>`;
   download(new Blob([gpx], { type: 'application/gpx+xml' }), 'topopuzzle_route.gpx');
-  setStatus('Downloaded topopuzzle_route.gpx', 'ok');
+  setStatusKey('stDownloaded', { file: 'topopuzzle_route.gpx' }, 'ok');
 });
 
 // The full-depth route has extra choices; the shallow modes have none.
@@ -558,7 +584,7 @@ async function fetchElevation(bounds, samples, onProgress) {
 
   let imgData;
   try { imgData = ctx.getImageData(0, 0, cw, ch); }
-  catch (e) { throw new Error('Elevation tiles blocked by CORS. Try a different network or a CORS proxy.'); }
+  catch (e) { throw new Error(t('errCors')); }
   const px = imgData.data;
 
   // Decode once into a Float32 elevation grid.
@@ -835,7 +861,8 @@ async function buildModel(opts, onProgress) {
   const { bounds, samples, nx, ny, vex, widthMM, baseMM } = opts;
   const [[latS, lonW], [latN, lonE]] = bounds;
 
-  const elevSrc = await fetchElevation(bounds, samples, (d, t) => onProgress(`Fetching terrain tiles ${d}/${t}…`));
+  // param is `n`, not `t` — `t` is the translation function
+  const elevSrc = await fetchElevation(bounds, samples, (d, n) => onProgress(t('pgTiles', { done: d, total: n })));
 
   const W = samples, D = samples;          // cells
   const VW = W + 1, VD = D + 1;            // vertices
@@ -857,14 +884,14 @@ async function buildModel(opts, onProgress) {
   const water = new Uint8Array(VW * VD);
   let hasWater = false;
   try {
-    onProgress('Fetching water areas (OSM)…');
+    onProgress(t('pgWater'));
     hasWater = await fetchWaterMask(bounds, W, D, VW, VD, water);
   } catch (e) { console.warn('Water lookup failed, continuing without it:', e); }
   for (let v = 0; v < water.length; v++) {
     if (!water[v] && Hv[v] <= 0.3) { water[v] = 1; hasWater = true; } // sea
   }
 
-  onProgress('Cutting puzzle pieces…');
+  onProgress(t('pgPieces'));
   const piece = buildPartition(W, D, nx, ny);
 
   // --- physical scaling ---
@@ -892,7 +919,7 @@ async function buildModel(opts, onProgress) {
   let rd = null;        // shallow inlay: per-vertex groove depth (m)
   let routeDist = null; // through route: distance to route centerline (model mm)
   if (opts.routePath && opts.routePath.length > 1 && opts.routeMode !== 'off') {
-    onProgress(throughRoute ? 'Cutting full-depth route…' : 'Stamping route…');
+    onProgress(t(throughRoute ? 'pgRouteThrough' : 'pgRoute'));
     const zSc = mmPerMeter * vex;
     const inlay = opts.routeMode === 'inlay';
     if (inlay) rd = new Float32Array(VW * VD);
@@ -1167,7 +1194,7 @@ function updateLegend() {
 function updateBandRanges(model) {
   for (let k = 0; k < 4; k++) {
     const lo = model.minE + k * model.eStep, hi = model.minE + (k + 1) * model.eStep;
-    $('bandR' + k).textContent = `${Math.round(lo)}–${Math.round(hi)} m`;
+    $('bandR' + k).textContent = t('fmtRange', { lo: Math.round(lo), hi: Math.round(hi) });
   }
 }
 
@@ -1219,8 +1246,11 @@ function initThree() {
   animate();
 }
 function resize() {
-  const w = $('view3d-wrap').clientWidth, h = $('view3d-wrap').clientHeight;
-  renderer.setSize(w, h, false);
+  // Clamp before dividing: a splitter can squeeze this pane thin, and a zero
+  // height would make the aspect Infinity/NaN and poison the projection matrix.
+  const w = Math.max($('view3d-wrap').clientWidth, 1);
+  const h = Math.max($('view3d-wrap').clientHeight, 1);
+  renderer.setSize(w, h, false);   // updateStyle false: CSS owns the canvas box
   camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
@@ -1346,7 +1376,7 @@ function download(blob, name) {
 
 async function exportZip() {
   if (!state.model) return;
-  setStatus('Zipping STL pieces…');
+  setStatusKey('stZipping');
   const zip = new JSZip();
   for (const P of state.model.pieces) {
     if (!P.pos.length) continue; // clipped away entirely by the shape
@@ -1362,29 +1392,23 @@ async function exportZip() {
     }
   }
   if (state.model.frame) zip.file('frame_plate.stl', pieceToBinarySTL(frameMergedMesh(state.model.frame)));
+  // README follows the interface language; the filenames above stay ASCII.
   const routeNote = !state.model.routeParts ? ''
     : state.model.routeMode === 'through'
-      ? `The route_red_*.stl parts run the full depth of the print. Print them in red\n` +
-        `(or any contrast colour) and press them into the channels; each side has 0.2 mm\n` +
-        `of clearance.\n` +
-        (state.model.routeJoin === 'continuous'
-          ? `route_red_continuous.stl spans every piece, so seat it only once the puzzle\n` +
-            `is fully assembled.\n`
-          : '')
-      : `The route_red_*.stl parts are shallow inlays. Print them in red and press them\n` +
-        `into the grooves.\n`;
-  zip.file('README.txt',
-    `TopoPuzzle export\nPieces: ${state.model.nx} x ${state.model.ny}\n` +
-    `Model size: ${state.model.modelWidth.toFixed(1)} x ${state.model.modelDepth.toFixed(1)} mm\n` +
-    `Print all pieces, then assemble the jigsaw. Tabs interlock by design.\n` + routeNote);
+      ? t('readmeThrough') + (state.model.routeJoin === 'continuous' ? t('readmeContinuous') : '')
+      : t('readmeInlay');
+  zip.file('README.txt', t('readmeHead', {
+    nx: state.model.nx, ny: state.model.ny,
+    w: state.model.modelWidth.toFixed(1), d: state.model.modelDepth.toFixed(1),
+  }) + routeNote);
   const blob = await zip.generateAsync({ type: 'blob' });
   download(blob, 'topopuzzle_pieces.zip');
-  setStatus('Downloaded topopuzzle_pieces.zip', 'ok');
+  setStatusKey('stDownloaded', { file: 'topopuzzle_pieces.zip' }, 'ok');
 }
 function exportOne() {
   if (!state.model) return;
   download(new Blob([combinedBinarySTL(state.model)], { type: 'model/stl' }), 'topopuzzle_combined.stl');
-  setStatus('Downloaded topopuzzle_combined.stl', 'ok');
+  setStatusKey('stDownloaded', { file: 'topopuzzle_combined.stl' }, 'ok');
 }
 function frameMergedMesh(F) {
   return F.text
@@ -1416,8 +1440,8 @@ function gateDownload(fn) {
 async function gateSubmit() {
   const name = $('gateName').value.trim();
   const email = $('gateEmail').value.trim();
-  if (!name) { $('gateErr').textContent = 'Please enter your name.'; return; }
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { $('gateErr').textContent = 'Please enter a valid email address.'; return; }
+  if (!name) { $('gateErr').textContent = t('gateErrName'); return; }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { $('gateErr').textContent = t('gateErrEmail'); return; }
   $('gateGo').disabled = true;
   try {
     const r = await fetch('/api/lead', {
@@ -1446,7 +1470,7 @@ $('exportFrame').addEventListener('click', gateDownload(() => {
   const F = state.model && state.model.frame;
   if (!F) return;
   download(new Blob([pieceToBinarySTL(frameMergedMesh(F))], { type: 'model/stl' }), 'frame_plate.stl');
-  setStatus('Downloaded frame_plate.stl', 'ok');
+  setStatusKey('stDownloaded', { file: 'frame_plate.stl' }, 'ok');
 }));
 
 /* ============================================================================
@@ -1834,7 +1858,7 @@ function meshObjectXML(id, pos, pindex, name) {
 async function exportBambu() {
   if (!state.model) return;
   const btn = $('exportBambu'); btn.disabled = true;
-  overlay(true, 'Building 4-color 3MF…'); setStatus('');
+  overlay(true, t('pgBambu')); setStatus('');
   try {
     await new Promise(r => setTimeout(r, 30)); // let the overlay paint
     const model = state.model;
@@ -2016,10 +2040,10 @@ async function exportBambu() {
 
     const blob = await zip.generateAsync({ type: 'blob', mimeType: 'model/3mf', compression: 'DEFLATE' });
     download(blob, 'topopuzzle_bambu_4color.3mf');
-    setStatus('Downloaded .3mf — Bambu Studio will load each color band as a separate AMS filament', 'ok');
+    setStatusKey('stBambuDone', null, 'ok');
   } catch (e) {
     console.error(e);
-    setStatus(e.message || '3MF export failed', 'err');
+    setStatus(e.message || t('err3mf'), 'err');
   } finally {
     overlay(false); btn.disabled = false;
   }
@@ -2029,12 +2053,29 @@ $('exportBambu').addEventListener('click', gateDownload(exportBambu));
 /* ============================================================================
    GENERATE
    ============================================================================ */
-function setStatus(msg, cls = '') { const s = $('status'); s.textContent = msg || ''; s.className = cls; }
+/* Status line. setStatusKey remembers what it rendered so switching language
+   re-renders it in place; setStatus takes an already-built string (an Error
+   message, say) and clears that memory since it cannot be re-translated. */
+let lastStatus = null;
+function renderStatus(msg, cls) { const s = $('status'); s.textContent = msg || ''; s.className = cls || ''; }
+function setStatus(msg, cls = '') { lastStatus = null; renderStatus(msg, cls); }
+function setStatusKey(key, params, cls = '') { lastStatus = { key, params, cls }; renderStatus(t(key, params), cls); }
 function overlay(on, text) { $('overlay').style.display = on ? 'grid' : 'none'; if (text) $('overlayText').textContent = text; }
+
+/* Numbers and units for the Model panel. Split out so a language switch can
+   re-render them from state.model without rebuilding any geometry. */
+function updateModelStats(model) {
+  if (!model) return;
+  $('elevStat').textContent = t('fmtRange', { lo: Math.round(model.minE), hi: Math.round(model.maxE) });
+  $('pieceStat').textContent = t('fmtPieceSize', { w: model.pieceW.toFixed(1), h: model.pieceH.toFixed(1) });
+  $('triStat').textContent = model.triCount.toLocaleString(tpLocale());
+  $('loStat').textContent = t('fmtMeters', { n: Math.round(model.minE) });
+  $('hiStat').textContent = t('fmtMeters', { n: Math.round(model.maxE) });
+}
 
 async function generate() {
   const btn = $('generate'); btn.disabled = true;
-  overlay(true, 'Preparing…'); setStatus('');
+  overlay(true, t('pgPreparing')); setStatus('');
   try {
     const bounds = (() => {
       const b = boundsFromCenter(state.center.lat, state.center.lon, state.areaKm);
@@ -2071,18 +2112,13 @@ async function generate() {
     showModel(model);
     updateBandRanges(model);
 
-    // stats
-    $('elevStat').textContent = `${Math.round(model.minE)}–${Math.round(model.maxE)} m`;
-    $('pieceStat').textContent = `${model.pieceW.toFixed(1)}×${model.pieceH.toFixed(1)} mm`;
-    $('triStat').textContent = model.triCount.toLocaleString();
-    $('loStat').textContent = Math.round(model.minE) + ' m';
-    $('hiStat').textContent = Math.round(model.maxE) + ' m';
+    updateModelStats(model);
     $('exportZip').disabled = false; $('exportOne').disabled = false; $('exportBambu').disabled = false;
     $('exportFrame').disabled = !model.frame;
-    setStatus(`Done · zoom ${model.zoom} · ${model.nx * model.ny} pieces`, 'ok');
+    setStatusKey('stDone', { zoom: model.zoom, n: model.nx * model.ny }, 'ok');
   } catch (e) {
     console.error(e);
-    setStatus(e.message || 'Generation failed', 'err');
+    setStatus(e.message || t('errGenerate'), 'err');
   } finally {
     overlay(false); btn.disabled = false;
   }
@@ -2137,10 +2173,192 @@ bindSlider('frameThick', 'frameThickVal', v => (+v).toFixed(1), refreshFrame);
 bindSlider('frameTextSize', 'frameTextSizeVal', v => (+v).toFixed(1), refreshFrame);
 bindSlider('frameTextPos', 'frameTextPosVal', v => (+v).toFixed(1), refreshFrame);
 
+/* ============================================================================
+   PANE SPLITTERS — drag the dividers to re-proportion settings / map / preview.
+
+   The layout means three different things: a 3-column grid above 1100px, a
+   2-column 3-row grid below that, and a flex column below 640px. So each handle
+   is resolved against the current breakpoint rather than hard-wired. Sizes live
+   in custom properties on #app; a double-click removes the inline property and
+   the stylesheet default takes over again.
+   ============================================================================ */
+const MQ_TABLET = matchMedia('(max-width: 1100px)');
+const MQ_PHONE = matchMedia('(max-width: 640px)');
+const paneMode = () => MQ_PHONE.matches ? 'phone' : MQ_TABLET.matches ? 'tablet' : 'wide';
+
+const MIN_SIDEBAR = 240, MAX_SIDEBAR = 560, MIN_PANE = 160;
+const appBox = () => $('app').getBoundingClientRect();
+const splitPx = () => parseFloat(getComputedStyle($('app')).getPropertyValue('--split')) || 6;
+const setVar = (n, v) => $('app').style.setProperty(n, v);
+const clearVars = names => names.forEach(n => $('app').style.removeProperty(n));
+
+/* What a handle does right now: which axis it moves on, which properties it
+   owns (so double-click knows what to clear), and how a pointer position turns
+   into sizes. Keyboard reuses apply() by offsetting the handle's own centre. */
+function splitRole(id) {
+  const mode = paneMode();
+  if (id === 'splitA') {
+    if (mode === 'phone') return {
+      // Delta from the grab point, not an absolute edge: the phone layout
+      // scrolls, and resizing a pane changes the document height, which clamps
+      // scrollY and slides any absolute anchor out from under the pointer.
+      axis: 'y', vars: ['--h-map'], begin: () => $('map-wrap').offsetHeight,
+      apply: (x, y, b) => setVar('--h-map', clamp(b.v + (y - b.y), MIN_PANE, innerHeight * 2) + 'px'),
+    };
+    return {                                    // wide + tablet: sidebar width
+      axis: 'x', vars: ['--w-sidebar'],
+      apply: x => {
+        const b = appBox();
+        setVar('--w-sidebar', clamp(x - b.left, MIN_SIDEBAR, Math.min(MAX_SIDEBAR, b.width - MIN_PANE)) + 'px');
+      },
+    };
+  }
+  if (mode === 'phone') return {                // splitB: preview height
+    axis: 'y', vars: ['--h-view'], begin: () => $('view3d-wrap').offsetHeight,
+    apply: (x, y, b) => setVar('--h-view', clamp(b.v + (y - b.y), MIN_PANE, innerHeight * 2) + 'px'),
+  };
+  if (mode === 'tablet') return {               // splitB: top row vs preview row
+    axis: 'y', vars: ['--fr-top', '--fr-bot'],
+    apply: (x, y) => {
+      const b = appBox(), gap = splitPx();
+      const top = clamp(y - b.top, MIN_PANE, b.height - gap - MIN_PANE);
+      setVar('--fr-top', top + 'fr');
+      setVar('--fr-bot', (b.height - gap - top) + 'fr');
+    },
+  };
+  return {                                      // wide: map vs preview columns
+    axis: 'x', vars: ['--fr-map', '--fr-view'],
+    apply: x => {
+      const b = appBox(), gap = splitPx();
+      const left = $('map-wrap').getBoundingClientRect().left;
+      const avail = b.right - left - gap;
+      const mapW = clamp(x - left, MIN_PANE, avail - MIN_PANE);
+      setVar('--fr-map', mapW + 'fr');
+      setVar('--fr-view', (avail - mapW) + 'fr');
+    },
+  };
+}
+
+function initSplitter(id) {
+  const el = $(id);
+  let role = null, base = null;   // base: pointer position + size at grab time
+  // Pointer capture keeps the drag alive when the cursor crosses into the map
+  // or the 3D canvas, whose own handlers would otherwise swallow the moves.
+  el.addEventListener('pointerdown', e => {
+    role = splitRole(id);
+    base = { x: e.clientX, y: e.clientY, v: role.begin ? role.begin() : 0 };
+    el.setPointerCapture(e.pointerId);
+    el.classList.add('dragging');
+    document.body.classList.add(role.axis === 'x' ? 'dragging-col' : 'dragging-row');
+    el.focus();
+    e.preventDefault();
+  });
+  el.addEventListener('pointermove', e => { if (role) role.apply(e.clientX, e.clientY, base); });
+  const end = e => {
+    if (!role) return;
+    role = null;
+    el.classList.remove('dragging');
+    document.body.classList.remove('dragging-col', 'dragging-row');
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  el.addEventListener('dblclick', () => clearVars(splitRole(id).vars));
+  el.addEventListener('keydown', e => {
+    const r = splitRole(id), step = e.shiftKey ? 48 : 16;
+    const box = el.getBoundingClientRect();
+    const cx = box.left + box.width / 2, cy = box.top + box.height / 2;
+    const b = { x: cx, y: cy, v: r.begin ? r.begin() : 0 };   // grab-equivalent
+    if (e.key === 'Home') clearVars(r.vars);
+    else if (r.axis === 'x' && e.key === 'ArrowLeft') r.apply(cx - step, cy, b);
+    else if (r.axis === 'x' && e.key === 'ArrowRight') r.apply(cx + step, cy, b);
+    else if (r.axis === 'y' && e.key === 'ArrowUp') r.apply(cx, cy - step, b);
+    else if (r.axis === 'y' && e.key === 'ArrowDown') r.apply(cx, cy + step, b);
+    else return;
+    e.preventDefault();
+  });
+}
+
+function syncSplitterOrientation() {
+  for (const id of ['splitA', 'splitB'])
+    $(id).setAttribute('aria-orientation', splitRole(id).axis === 'x' ? 'vertical' : 'horizontal');
+}
+
+/* A sidebar width chosen on a wide screen would swallow a tablet, so re-clamp
+   whenever the breakpoint flips. */
+function onBreakpointChange() {
+  syncSplitterOrientation();
+  if (paneMode() === 'phone') return;
+  const b = appBox(), cap = Math.min(MAX_SIDEBAR, b.width - MIN_PANE);
+  if ($('sidebar').offsetWidth > cap) setVar('--w-sidebar', cap + 'px');
+}
+MQ_TABLET.addEventListener('change', onBreakpointChange);
+MQ_PHONE.addEventListener('change', onBreakpointChange);
+
+/* Leaflet measures its container once at construction and afterwards only on a
+   window resize — a pane resize is neither, and a stale box does not just leave
+   grey tiles, it desynchronises click -> latlng, which is how route points are
+   placed. Watching the panes covers dragging and breakpoint flips alike. */
+let paneSyncQueued = false;
+function syncPanes() {
+  if (paneSyncQueued) return;
+  paneSyncQueued = true;
+  requestAnimationFrame(() => {
+    paneSyncQueued = false;
+    map.invalidateSize({ animate: false });
+    if (renderer) resize();          // initThree is allowed to fail without WebGL
+  });
+}
+if (window.ResizeObserver) {
+  const paneRO = new ResizeObserver(syncPanes);
+  paneRO.observe($('map-wrap'));
+  paneRO.observe($('view3d-wrap'));
+}
+initSplitter('splitA');
+initSplitter('splitB');
+syncSplitterOrientation();
+
+/* ============================================================================
+   LANGUAGE — Thai / English. Switching never rebuilds the model; it only
+   re-renders text, so the current terrain and camera survive untouched.
+   ============================================================================ */
+function setLang(code, persist) {
+  tpSetLangCode(code);
+  const lang = tpLang();
+  document.documentElement.lang = lang;       // drives the Thai line-height CSS
+  document.title = t('pageTitle');
+  applyI18n();                                // every data-i18n* element
+
+  // text that applyI18n cannot own, because it depends on runtime state
+  refreshRouteBtn();
+  updateModelStats(state.model);
+  if (state.model) updateBandRanges(state.model);
+  if (lastStatus) renderStatus(t(lastStatus.key, lastStatus.params), lastStatus.cls);
+  refreshLayerControl();
+
+  $('langEn').classList.toggle('active', lang === 'en');
+  $('langTh').classList.toggle('active', lang === 'th');
+  if (persist) { try { localStorage.setItem('tp_lang', lang); } catch (e) { /* private mode */ } }
+}
+
+/* ?lang= wins, then a remembered choice, then the browser's own language.
+   Mirrors the ?resetlead / tp_lead precedent used by the download gate. */
+function initialLang() {
+  const q = new URLSearchParams(location.search).get('lang');
+  if (q && I18N[q]) return q;
+  let saved = null;
+  try { saved = localStorage.getItem('tp_lang'); } catch (e) { /* private mode */ }
+  if (saved && I18N[saved]) return saved;
+  return (navigator.language || 'en').toLowerCase().startsWith('th') ? 'th' : 'en';
+}
+$('langEn').addEventListener('click', () => setLang('en', true));
+$('langTh').addEventListener('click', () => setLang('th', true));
+
 /* ---------- boot ---------- */
+setLang(initialLang(), false);
 try { initThree(); } catch (e) { console.warn('3D preview unavailable (WebGL):', e); }
 updateLegend();
-setStatus('Pick a place, then “Generate terrain”. Default: Mount Fuji.');
+setStatusKey('stBoot');
 </script>
 </body>
 </html>
