@@ -1,3 +1,6 @@
 # collected downloader emails — personal data, never push to the public repo
 leads.csv
 __pycache__/
+
+# generated GPX test fixtures - rebuild with: node fixtures/make-fixtures.js
+fixtures/*.gpx

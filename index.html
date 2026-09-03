@@ -172,7 +172,7 @@
       <div class="legend-labels"><span id="loStat" data-i18n="legendLow">low</span><span id="hiStat" data-i18n="legendHigh">high</span></div>
     </div>
 
-    <button id="exportBambu" class="ghost" disabled data-i18n="btnExportBambu">⬇ Export Bambu 4-color puzzle (.3mf)</button>
+    <button id="exportBambu" class="ghost" disabled data-i18n="btnExportBambu">⬇ Export Bambu 3MF — terrain + route (2 files)</button>
     <button id="exportZip" class="ghost" disabled data-i18n="btnExportZip">⬇ Export puzzle pieces (.zip of STL)</button>
     <button id="exportOne" class="ghost" disabled data-i18n="btnExportOne">⬇ Export single combined STL</button>
     <button id="exportFrame" class="ghost" disabled data-i18n="btnExportFrame">⬇ Export frame plate (STL)</button>
@@ -454,20 +454,42 @@ function fitAreaToBounds(b) {
 /* ---------- GPX track import ---------- */
 let gpxLayer = null;
 $('gpxBtn').addEventListener('click', () => $('gpxFile').click());
+/* GPX fixes its element order as wpt*, rte*, trk* — and querySelectorAll returns
+   document order, not selector order. Querying all three at once therefore
+   interleaves waypoints, route points and track points into one zig-zagging
+   path, and inflates the bounds we fit the puzzle area to. Pick a single kind
+   instead: a recorded track beats a planned route beats loose waypoints. */
+function gpxPoints(xml) {
+  const coords = el => [parseFloat(el.getAttribute('lat')), parseFloat(el.getAttribute('lon'))];
+  const finite = p => Number.isFinite(p[0]) && Number.isFinite(p[1]);
+  // walk <trkseg>s in file order so a paused-and-resumed recording joins up
+  const segs = [...xml.querySelectorAll('trkseg')];
+  if (segs.length) {
+    const pts = segs.flatMap(sg => [...sg.querySelectorAll('trkpt')].map(coords)).filter(finite);
+    if (pts.length) return pts;
+  }
+  for (const sel of ['trkpt', 'rtept', 'wpt']) {
+    const pts = [...xml.querySelectorAll(sel)].map(coords).filter(finite);
+    if (pts.length) return pts;
+  }
+  return [];
+}
+
 $('gpxFile').addEventListener('change', async e => {
   const f = e.target.files[0];
   if (!f) return;
   try {
     const xml = new DOMParser().parseFromString(await f.text(), 'application/xml');
     if (xml.querySelector('parsererror')) throw new Error(t('errBadGpx'));
-    const pts = [...xml.querySelectorAll('trkpt, rtept, wpt')]
-      .map(p => [parseFloat(p.getAttribute('lat')), parseFloat(p.getAttribute('lon'))])
-      .filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+    const pts = gpxPoints(xml);
     if (!pts.length) throw new Error(t('errNoGpxPoints'));
     if (gpxLayer) map.removeLayer(gpxLayer);
+    // an imported file replaces a drawn route rather than losing to it silently
+    route.pts = []; route.line = null; route.layer.clearLayers(); setDrawing(false);
     gpxLayer = L.polyline(pts, { color: '#f2a65a', weight: 3, opacity: 0.9 }).addTo(map);
     const km = fitAreaToBounds(gpxLayer.getBounds());
     $('gpxClear').style.display = '';
+    updateRouteButtons();
     setStatusKey('stGpxLoaded', { count: pts.length, km }, 'ok');
   } catch (err) { setStatus(err.message, 'err'); }
   e.target.value = '';
@@ -475,6 +497,7 @@ $('gpxFile').addEventListener('change', async e => {
 $('gpxClear').addEventListener('click', () => {
   if (gpxLayer) { map.removeLayer(gpxLayer); gpxLayer = null; }
   $('gpxClear').style.display = 'none';
+  updateRouteButtons();
   setStatusKey('stGpxRemoved');
 });
 
@@ -491,11 +514,20 @@ function routeIcon(mid) {
   });
 }
 
+/* The single source of truth for "the route". Drawn points win when there are
+   enough of them (drawing after an import is deliberate); otherwise an imported
+   track is it. Importing clears route.pts, so the two never compete silently. */
+function currentRoutePts() {
+  if (route.pts.length > 1) return route.pts;
+  if (gpxLayer) return gpxLayer.getLatLngs().map(ll => [ll.lat, ll.lng]);
+  return null;
+}
+
 function updateRouteButtons() {
-  const n = route.pts.length;
-  $('routeClear').style.display = n ? '' : 'none';
-  $('routeFit').style.display = n > 1 ? '' : 'none';
-  $('routeSave').style.display = n > 1 ? '' : 'none';
+  const n = route.pts.length, hasRoute = !!currentRoutePts();
+  $('routeClear').style.display = (n || gpxLayer) ? '' : 'none';
+  $('routeFit').style.display = hasRoute ? '' : 'none';
+  $('routeSave').style.display = hasRoute ? '' : 'none';
 }
 
 function redrawRoute() {
@@ -583,16 +615,20 @@ $('routeGps').addEventListener('click', () => {
 });
 
 $('routeFit').addEventListener('click', () => {
-  const km = fitAreaToBounds(L.latLngBounds(route.pts));
+  const pts = currentRoutePts();
+  if (!pts) return;
+  const km = fitAreaToBounds(L.latLngBounds(pts));
   setStatusKey('stAreaFit', { km }, 'ok');
 });
 $('routeClear').addEventListener('click', () => {
   route.pts = []; route.line = null; route.layer.clearLayers();
+  if (gpxLayer) { map.removeLayer(gpxLayer); gpxLayer = null; $('gpxClear').style.display = 'none'; }
   setDrawing(false); updateRouteButtons();
   setStatusKey('stRouteDeleted');
 });
 $('routeSave').addEventListener('click', () => {
-  const seg = route.pts.map(p => `<trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"/>`).join('');
+  const pts = currentRoutePts() || [];
+  const seg = pts.map(p => `<trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"/>`).join('');
   const gpx = '<?xml version="1.0" encoding="UTF-8"?>' +
     '<gpx version="1.1" creator="TopoPuzzle" xmlns="http://www.topografix.com/GPX/1/1">' +
     `<trk><name>TopoPuzzle route</name><trkseg>${seg}</trkseg></trk></gpx>`;
@@ -1967,6 +2003,117 @@ function meshObjectXML(id, pos, pindex, name) {
   return s.join('');
 }
 
+/* Everything below the object list is identical for every 3MF this app writes:
+   the model XML, Bambu's model_settings sidecar (which is what actually drives
+   AMS slots), project_settings, and the OPC zip skeleton. Factored out so the
+   terrain and the route can each be packed by the same code. */
+async function pack3mf({ resources, items, projectObjects, filamentColors }) {
+  const modelXml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" ' +
+    'xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">' +
+    '<metadata name="Application">BambuStudio-01.09.07.52</metadata>' +
+    '<metadata name="BambuStudio:3mfVersion">1</metadata>' +
+    `<resources>${resources.join('')}</resources><build>${items.join('')}</build></model>`;
+
+  // Bambu Studio ignores standard 3MF base-material assignments when deciding
+  // which AMS slot a component should use. Its native sidecar maps each child
+  // mesh ("part") to a 1-based extruder; keep the core materials above as a
+  // portable fallback for other 3MF readers.
+  const settings = ['<?xml version="1.0" encoding="UTF-8"?>', '<config>'];
+  for (const obj of projectObjects) {
+    settings.push(`<object id="${obj.id}">`,
+      `<metadata key="name" value="${xmlAttr(obj.name)}"/>`,
+      '<metadata key="extruder" value="1"/>');
+    for (const part of obj.parts) {
+      settings.push(`<part id="${part.id}" subtype="normal_part">`,
+        `<metadata key="name" value="${xmlAttr(part.name)}"/>`,
+        `<metadata key="extruder" value="${part.extruder}"/>`,
+        '</part>');
+    }
+    settings.push('</object>');
+  }
+  settings.push('<plate>',
+    '<metadata key="plater_id" value="1"/>',
+    '<metadata key="plater_name" value="TopoPuzzle"/>',
+    '<metadata key="locked" value="false"/>');
+  for (const obj of projectObjects) {
+    settings.push('<model_instance>',
+      `<metadata key="object_id" value="${obj.id}"/>`,
+      '<metadata key="instance_id" value="0"/>',
+      `<metadata key="identify_id" value="${obj.id}"/>`,
+      '</model_instance>');
+  }
+  settings.push('</plate>', '</config>');
+
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml',
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>' +
+    '<Default Extension="config" ContentType="application/octet-stream"/></Types>');
+  zip.folder('_rels').file('.rels',
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>');
+  zip.folder('3D').file('3dmodel.model', modelXml);
+  zip.folder('Metadata').file('model_settings.config', settings.join(''));
+  zip.folder('Metadata').file('project_settings.config', JSON.stringify({
+    version: '01.09.07.52',
+    from: 'project',
+    filament_colour: filamentColors,
+  }));
+  return zip.generateAsync({ type: 'blob', mimeType: 'model/3mf', compression: 'DEFLATE' });
+}
+
+/* The route as a standalone 3MF. Red is the only material here, so its pindex
+   is 0 and its extruder is 1 — carried over at the index it had in the terrain
+   file it would ask Bambu Studio for a filament this file never defines.
+   Returns null when there is nothing to print: route off, or engrave mode,
+   which produces no separate part at all. */
+function buildRoute3mf(model, pitchX, pitchY) {
+  const res = ['<basematerials id="1">',
+    '<base name="route_red" displaycolor="#E5534BFF"/>',
+    '</basematerials>'];
+  const items = [], projectObjects = [];
+  let nextId = 2;
+  for (const R of model.routeParts || []) {
+    const continuous = R.pid === null;
+    const row = continuous ? 0 : Math.floor(R.pid / model.nx) + 1;
+    const col = continuous ? 0 : R.pid % model.nx + 1;
+    const name = continuous ? 'route_continuous' : `r${row}c${col}_route`;
+    const meshId = nextId;
+    const xml = meshObjectXML(meshId, R.pos, 0, name);
+    if (!xml) continue;                       // clipped away entirely
+    nextId++;
+    res.push(xml);
+    const objId = nextId++;
+    res.push(`<object id="${objId}" type="model" name="${name}"><components>` +
+      `<component objectid="${meshId}"/></components></object>`);
+    let tx, ty;
+    if (continuous) {
+      // one bar spanning every piece — centre it on the plate
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (let k = 0; k < R.pos.length; k += 3) {
+        minX = Math.min(minX, R.pos[k]); maxX = Math.max(maxX, R.pos[k]);
+        minY = Math.min(minY, R.pos[k + 1]); maxY = Math.max(maxY, R.pos[k + 1]);
+      }
+      tx = 128 - (minX + maxX) / 2;
+      ty = 128 - (minY + maxY) / 2;
+    } else {
+      // the same grid the terrain pieces use, so each segment stays under the
+      // piece it belongs to and is easy to match up when seating them
+      const P = model.pieces[R.pid];
+      tx = 128 + ((col - 1) - (model.nx - 1) / 2) * pitchX - P.cx;
+      ty = 128 + ((model.ny - 1) / 2 - (row - 1)) * pitchY - P.cy;
+    }
+    items.push(`<item objectid="${objId}" transform="1 0 0 0 1 0 0 0 1 ${fmtN(tx)} ${fmtN(ty)} 0" printable="1"/>`);
+    projectObjects.push({ id: objId, name, parts: [{ id: meshId, name, extruder: 1 }] });
+  }
+  if (!projectObjects.length) return null;
+  return pack3mf({ resources: res, items, projectObjects, filamentColors: ['#E5534B'] });
+}
+
 async function exportBambu() {
   if (!state.model) return;
   const btn = $('exportBambu'); btn.disabled = true;
@@ -1974,6 +2121,10 @@ async function exportBambu() {
   try {
     await new Promise(r => setTimeout(r, 30)); // let the overlay paint
     const model = state.model;
+
+    /* Terrain file: the 4 elevation bands, plus water and the frame plate when
+       present. The route is deliberately absent — it ships as its own file
+       below, which also frees an AMS slot here. */
     const bandNames = ['low', 'mid-low', 'mid-high', 'peak'];
     const res = ['<basematerials id="1">'];
     const filamentColors = [];
@@ -1982,11 +2133,7 @@ async function exportBambu() {
       filamentColors.push(color);
       res.push(`<base name="band${k + 1}_${bandNames[k]}" displaycolor="${color}FF"/>`);
     }
-    let nextP = 4, routePindex = -1, waterPindex = -1, platePindex = -1, textPindex = -1;
-    if (model.routeParts) {
-      res.push('<base name="route_red" displaycolor="#E5534BFF"/>');
-      filamentColors.push('#E5534B'); routePindex = nextP++;
-    }
+    let nextP = 4, waterPindex = -1, platePindex = -1, textPindex = -1;
     if (model.hasWater) {
       const color = WATER_HEX.toUpperCase();
       res.push(`<base name="water_blue" displaycolor="${color}FF"/>`);
@@ -2013,13 +2160,6 @@ async function exportBambu() {
         const name = `r${row}c${col}_band${b + 1}`;
         const xml = meshObjectXML(nextId, buildBandSolidMesh(model, P.id, b), b, name);
         if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: b + 1 }); nextId++; }
-      }
-      // this piece's segment of the red route inlay (5th material)
-      const R = model.routeParts && model.routeParts.find(r => r.pid === P.id);
-      if (R) {
-        const name = `r${row}c${col}_route`;
-        const xml = meshObjectXML(nextId, R.pos, routePindex, name);
-        if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: routePindex + 1 }); nextId++; }
       }
       // this piece's blue water skin
       if (model.hasWater) {
@@ -2063,96 +2203,19 @@ async function exportBambu() {
       }
     }
 
-    // A continuous through-route cannot inherit the transforms of individually
-    // spaced puzzle pieces. Export it as its own red object below the grid.
-    const continuousRoute = model.routeMode === 'through' && model.routeJoin === 'continuous'
-      ? (model.routeParts || []).find(r => r.pid === null) : null;
-    if (continuousRoute) {
-      const routeMeshId = nextId++;
-      const routeXml = meshObjectXML(routeMeshId, continuousRoute.pos, routePindex, 'route_continuous');
-      if (routeXml) {
-        res.push(routeXml);
-        const routeObjectId = nextId++;
-        res.push(`<object id="${routeObjectId}" type="model" name="route_continuous"><components>` +
-          `<component objectid="${routeMeshId}"/></components></object>`);
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        for (let k = 0; k < continuousRoute.pos.length; k += 3) {
-          minX = Math.min(minX, continuousRoute.pos[k]); maxX = Math.max(maxX, continuousRoute.pos[k]);
-          minY = Math.min(minY, continuousRoute.pos[k + 1]); maxY = Math.max(maxY, continuousRoute.pos[k + 1]);
-        }
-        const routeCx = (minX + maxX) / 2, routeCy = (minY + maxY) / 2;
-        let targetY = 128 - ((model.ny + 1) / 2) * pitchY - (maxY - minY) / 2;
-        if (model.frame) targetY -= model.frame.halfY * 2 + model.pieceH;
-        items.push(`<item objectid="${routeObjectId}" transform="1 0 0 0 1 0 0 0 1 ${fmtN(128 - routeCx)} ${fmtN(targetY - routeCy)} 0" printable="1"/>`);
-        projectObjects.push({
-          id: routeObjectId,
-          name: 'route_continuous',
-          parts: [{ id: routeMeshId, name: 'route_continuous', extruder: routePindex + 1 }]
-        });
-      }
+    const terrainBlob = await pack3mf({ resources: res, items, projectObjects, filamentColors });
+    const routeBlob = await buildRoute3mf(model, pitchX, pitchY);
+
+    download(terrainBlob, 'topopuzzle_bambu_4color.3mf');
+    if (routeBlob) {
+      // browsers gate back-to-back downloads from one gesture; give the first
+      // one a moment to be accepted before asking for the second
+      await new Promise(r => setTimeout(r, 500));
+      download(routeBlob, 'topopuzzle_bambu_route.3mf');
+      setStatusKey('stBambuDoneRoute', null, 'ok');
+    } else {
+      setStatusKey('stBambuDone', null, 'ok');
     }
-
-    const modelXml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
-      '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" ' +
-      'xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">' +
-      '<metadata name="Application">BambuStudio-01.09.07.52</metadata>' +
-      '<metadata name="BambuStudio:3mfVersion">1</metadata>' +
-      `<resources>${res.join('')}</resources><build>${items.join('')}</build></model>`;
-
-    // Bambu Studio ignores standard 3MF base-material assignments when deciding
-    // which AMS slot a component should use. Its native sidecar maps each child
-    // mesh ("part") to a 1-based extruder; keep the core materials above as a
-    // portable fallback for other 3MF readers.
-    const settings = ['<?xml version="1.0" encoding="UTF-8"?>', '<config>'];
-    for (const obj of projectObjects) {
-      settings.push(`<object id="${obj.id}">`,
-        `<metadata key="name" value="${xmlAttr(obj.name)}"/>`,
-        '<metadata key="extruder" value="1"/>');
-      for (const part of obj.parts) {
-        settings.push(`<part id="${part.id}" subtype="normal_part">`,
-          `<metadata key="name" value="${xmlAttr(part.name)}"/>`,
-          `<metadata key="extruder" value="${part.extruder}"/>`,
-          '</part>');
-      }
-      settings.push('</object>');
-    }
-    settings.push('<plate>',
-      '<metadata key="plater_id" value="1"/>',
-      '<metadata key="plater_name" value="TopoPuzzle"/>',
-      '<metadata key="locked" value="false"/>');
-    for (const obj of projectObjects) {
-      settings.push('<model_instance>',
-        `<metadata key="object_id" value="${obj.id}"/>`,
-        '<metadata key="instance_id" value="0"/>',
-        `<metadata key="identify_id" value="${obj.id}"/>`,
-        '</model_instance>');
-    }
-    settings.push('</plate>', '</config>');
-    const modelSettingsXml = settings.join('');
-    const projectSettings = JSON.stringify({
-      version: '01.09.07.52',
-      from: 'project',
-      filament_colour: filamentColors
-    });
-
-    const zip = new JSZip();
-    zip.file('[Content_Types].xml',
-      '<?xml version="1.0" encoding="UTF-8"?>' +
-      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
-      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
-      '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>' +
-      '<Default Extension="config" ContentType="application/octet-stream"/></Types>');
-    zip.folder('_rels').file('.rels',
-      '<?xml version="1.0" encoding="UTF-8"?>' +
-      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-      '<Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>');
-    zip.folder('3D').file('3dmodel.model', modelXml);
-    zip.folder('Metadata').file('model_settings.config', modelSettingsXml);
-    zip.folder('Metadata').file('project_settings.config', projectSettings);
-
-    const blob = await zip.generateAsync({ type: 'blob', mimeType: 'model/3mf', compression: 'DEFLATE' });
-    download(blob, 'topopuzzle_bambu_4color.3mf');
-    setStatusKey('stBambuDone', null, 'ok');
   } catch (e) {
     console.error(e);
     setStatus(e.message || t('err3mf'), 'err');
@@ -2160,6 +2223,7 @@ async function exportBambu() {
     overlay(false); btn.disabled = false;
   }
 }
+
 $('exportBambu').addEventListener('click', gateDownload(exportBambu));
 
 /* ============================================================================
@@ -2207,8 +2271,7 @@ async function generate() {
       routeJoin: $('routeJoin').value,
       frameStyle: currentPrintShape(),
       routePath: (() => {
-        let path = route.pts.length > 1 ? route.pts
-          : gpxLayer ? gpxLayer.getLatLngs().map(ll => [ll.lat, ll.lng]) : null;
+        let path = currentRoutePts();
         if (path && path.length > 400) { // cap segments so stamping stays fast
           const step = Math.ceil(path.length / 400);
           path = path.filter((_, k) => k % step === 0 || k === path.length - 1);
@@ -2228,6 +2291,14 @@ async function generate() {
     $('exportZip').disabled = false; $('exportOne').disabled = false; $('exportBambu').disabled = false;
     $('exportFrame').disabled = !model.frame;
     setStatusKey('stDone', { zoom: model.zoom, n: model.nx * model.ny }, 'ok');
+    // A route that lies outside the puzzle area is stamped nowhere and the print
+    // comes out bare. Say so rather than reporting a clean success.
+    if (opts.routePath && opts.routePath.length > 1 && opts.routeMode !== 'off') {
+      const [[latS, lonW], [latN, lonE]] = bounds;
+      const anyInside = opts.routePath.some(([la, lo]) =>
+        la >= latS && la <= latN && lo >= lonW && lo <= lonE);
+      if (!anyInside) setStatusKey('stRouteOutside', null, 'err');
+    }
   } catch (e) {
     console.error(e);
     setStatus(e.message || t('errGenerate'), 'err');
