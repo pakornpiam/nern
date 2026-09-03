@@ -35,7 +35,7 @@
         <input id="search" type="text" data-i18n-placeholder="searchPlaceholder" placeholder="Search a place (e.g. Mount Fuji)" />
         <button id="searchBtn" data-i18n="searchGo">Go</button>
       </div>
-      <div class="hint" data-i18n="hintRecenter">Or click the map to recenter. Drag the box handle by moving center + resizing area below.</div>
+      <div class="hint" data-i18n="hintRecenter">Drag the green box to move the puzzle area, or drag a corner to resize it. Click anywhere else on the map to recentre.</div>
       <div class="search-row" style="margin-top:8px">
         <input id="gpxFile" type="file" accept=".gpx" style="display:none" />
         <button id="gpxBtn" style="flex:1" data-i18n="gpxLoad">Load GPX track…</button>
@@ -268,20 +268,135 @@ function refreshLayerControl() {
 }
 refreshLayerControl();
 
-let boxRect = null;
+/* ============================================================================
+   AREA BOX — the green rectangle is the primary control for the puzzle area:
+   drag a corner to resize (centre stays pinned), drag inside to move. The
+   "Area size" slider is a second view of the same number, not the master.
+   ============================================================================ */
+const BOX_COLOR = '#4dd0a7';
+let boxRect = null, boxHandleMarkers = [], boxHandleLayer = null, boxDragged = false;
+
 function boundsFromCenter(lat, lon, km) {
   const dLat = (km / 2) / 111.32;
   const dLon = (km / 2) / (111.32 * Math.cos(lat * Math.PI / 180));
   return [[lat - dLat, lon - dLon], [lat + dLat, lon + dLon]];
 }
-function drawBox() {
+
+/* Single write-through for the area. State, the lat/lon inputs and the slider
+   have to move together: bindSlider listens on 'input' and re-reads the DOM as
+   the source of truth, so an update that skipped $('area').value would be
+   silently undone the next time the slider is touched. */
+function setArea(lat, lon, km, skipHandle) {
+  state.center.lat = +lat.toFixed(4);
+  state.center.lon = +lon.toFixed(4);
+  $('lat').value = state.center.lat;
+  $('lon').value = state.center.lon;
+  state.areaKm = clamp(Math.round(km), 2, 120);          // the slider's own domain
+  $('area').value = state.areaKm;
+  $('areaVal').textContent = state.areaKm;
+  drawBox(skipHandle);
+}
+
+function drawBox(skipHandle) {
   const b = boundsFromCenter(state.center.lat, state.center.lon, state.areaKm);
   if (boxRect) boxRect.setBounds(b);
-  else boxRect = L.rectangle(b, { color: '#4dd0a7', weight: 2, fillColor: '#4dd0a7', fillOpacity: 0.08 }).addTo(map);
+  else {
+    boxRect = L.rectangle(b, {
+      color: BOX_COLOR, weight: 2, fillColor: BOX_COLOR, fillOpacity: 0.08,
+      // keep the box's own clicks away from the map's recentre handler below
+      bubblingMouseEvents: false,
+    }).addTo(map);
+    bindBoxMove();
+  }
+  placeBoxHandles(skipHandle);
 }
+
+/* NW, NE, SE, SW */
+function boxCorners() {
+  const [[s, w], [n, e]] = boundsFromCenter(state.center.lat, state.center.lon, state.areaKm);
+  return [[n, w], [n, e], [s, e], [s, w]];
+}
+
+const boxHandleIcon = L.divIcon({
+  className: '',
+  html: `<div style="width:12px;height:12px;border:2px solid #fff;background:${BOX_COLOR};` +
+        `box-shadow:0 0 3px rgba(0,0,0,.6);cursor:move"></div>`,
+  iconSize: [12, 12], iconAnchor: [6, 6],
+});
+
+/* Built once; afterwards only repositioned. Rebuilding the layer mid-gesture
+   would destroy the very marker Leaflet is dragging and the drag would die. */
+function buildBoxHandles() {
+  boxHandleLayer = L.layerGroup().addTo(map);
+  boxHandleMarkers = boxCorners().map((ll, i) => {
+    const m = L.marker(ll, { icon: boxHandleIcon, draggable: true, keyboard: false });
+    m.addTo(boxHandleLayer);
+    // Marker.Drag already suppresses map panning, so no map.dragging.disable().
+    m.on('drag', ev => {
+      const p = ev.target.getLatLng(), c = state.center;
+      const dxKm = haversine(c.lat, c.lon, c.lat, p.lng) / 1000;
+      const dyKm = haversine(c.lat, c.lon, p.lat, c.lon) / 1000;
+      // centre pinned; max() so the box always encloses the pointer
+      setArea(c.lat, c.lon, 2 * Math.max(dxKm, dyKm), i);
+    });
+    m.on('dragend', () => { boxDragged = true; placeBoxHandles(); });
+    return m;
+  });
+}
+
+function placeBoxHandles(skip) {
+  if (!boxHandleMarkers.length) return;
+  const corners = boxCorners();
+  boxHandleMarkers.forEach((m, i) => { if (i !== skip) m.setLatLng(corners[i]); });
+}
+
+/* L.Rectangle is a Path with no built-in drag, so this gesture is hand-rolled,
+   and it is the only place that has to park the map's own pan handler.
+
+   Bound with pointer events on the SVG path rather than Leaflet's 'mousedown':
+   Leaflet does not fire mousedown on a Path for touch, and pointer capture
+   routes every move and the release back here no matter where the finger ends
+   up — so the gesture cannot leak a live move handler onto the next motion. */
+function bindBoxMove() {
+  const el = boxRect.getElement();
+  if (!el) return;
+  el.style.touchAction = 'none';        // or the browser pans the page instead
+  el.addEventListener('pointerdown', ev => {
+    if (route.drawing) return;
+    ev.stopPropagation();               // keep it off the map's recentre handler
+    ev.preventDefault();
+    el.setPointerCapture(ev.pointerId);
+    map.dragging.disable();
+    const start = map.mouseEventToLatLng(ev);
+    const c0 = { lat: state.center.lat, lon: state.center.lon };
+    let moved = false;
+    const onMove = m => {
+      const p = map.mouseEventToLatLng(m);
+      moved = true;
+      setArea(c0.lat + (p.lat - start.lat), c0.lon + (p.lng - start.lng), state.areaKm);
+    };
+    const onUp = m => {
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
+      if (el.hasPointerCapture(m.pointerId)) el.releasePointerCapture(m.pointerId);
+      map.dragging.enable();
+      boxDragged = moved;
+    };
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
+  });
+}
+
 drawBox();
+buildBoxHandles();
+
+// A genuine press on the map clears any stale drag flag before its click lands.
+map.on('mousedown', () => { boxDragged = false; });
 
 map.on('click', e => {
+  if (boxDragged) { boxDragged = false; return; }   // trailing click from a box drag
   if (route.drawing) { route.pts.push([e.latlng.lat, e.latlng.lng]); redrawRoute(); updateRouteButtons(); return; }
   state.center.lat = +e.latlng.lat.toFixed(4);
   state.center.lon = +e.latlng.lng.toFixed(4);
@@ -329,16 +444,11 @@ function zoomForKm(km) { return clamp(Math.round(13 - Math.log2(km / 3)), 3, 14)
 /* Recenter + resize the puzzle box to cover latLng bounds; returns area km. */
 function fitAreaToBounds(b) {
   const c = b.getCenter();
-  state.center.lat = +c.lat.toFixed(4);
-  state.center.lon = +c.lng.toFixed(4);
-  $('lat').value = state.center.lat; $('lon').value = state.center.lon;
   const wKm = haversine(c.lat, b.getWest(), c.lat, b.getEast()) / 1000;
   const hKm = haversine(b.getSouth(), c.lng, b.getNorth(), c.lng) / 1000;
-  const km = clamp(Math.ceil(Math.max(wKm, hKm, 1) * 1.15), 2, 120);
-  state.areaKm = km; $('area').value = km; $('areaVal').textContent = km;
-  drawBox();
+  setArea(c.lat, c.lng, Math.ceil(Math.max(wKm, hKm, 1) * 1.15));   // setArea clamps
   map.fitBounds(b.pad(0.15));
-  return km;
+  return state.areaKm;
 }
 
 /* ---------- GPX track import ---------- */
@@ -424,6 +534,8 @@ function setDrawing(on) {
   $('routeBtn').style.borderColor = on ? 'var(--accent)' : '';
   map.getContainer().style.cursor = on ? 'crosshair' : '';
   if (on) map.doubleClickZoom.disable(); else map.doubleClickZoom.enable();
+  // the map belongs to route drawing while it is on — no competing box handles
+  if (boxHandleLayer) { if (on) map.removeLayer(boxHandleLayer); else boxHandleLayer.addTo(map); }
 }
 $('routeBtn').addEventListener('click', () => setDrawing(!route.drawing));
 map.on('dblclick', () => {
