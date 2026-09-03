@@ -52,10 +52,30 @@
       <label class="row" style="margin-top:8px">Route on print</label>
       <select id="routeMode">
         <option value="inlay" selected>Red inlay — separate printable part</option>
+        <option value="through">Full-depth route — removable top-to-bottom piece</option>
         <option value="emboss">Raised ridge (~1 mm)</option>
         <option value="engrave">Engraved groove (~0.8 mm)</option>
         <option value="off">Off</option>
       </select>
+      <div id="throughRouteOpts" style="display:none">
+        <div class="two-col" style="margin-top:8px">
+          <div>
+            <label class="row" style="margin:0 0 4px">Route top</label>
+            <select id="routeTop">
+              <option value="flush" selected>Flush with terrain</option>
+              <option value="raised">Raised 0.6 mm</option>
+            </select>
+          </div>
+          <div>
+            <label class="row" style="margin:0 0 4px">Route pieces</label>
+            <select id="routeJoin">
+              <option value="piece" selected>Split per puzzle piece</option>
+              <option value="continuous">One continuous route</option>
+            </select>
+          </div>
+        </div>
+        <div class="hint">The 3.2 mm route reaches the print bottom. Its channel is 3.6 mm wide, leaving 0.2 mm clearance on each side for assembly.</div>
+      </div>
       <label class="row">Area size <span class="val"><span id="areaVal">24</span> km</span></label>
       <input id="area" type="range" min="2" max="120" value="24" step="1" />
       <div class="two-col" style="margin-top:8px">
@@ -442,6 +462,13 @@ $('routeSave').addEventListener('click', () => {
   setStatus('Downloaded topopuzzle_route.gpx', 'ok');
 });
 
+// The full-depth route has extra choices; the shallow modes have none.
+function syncRouteModeUI() {
+  $('throughRouteOpts').style.display = $('routeMode').value === 'through' ? '' : 'none';
+}
+$('routeMode').addEventListener('change', syncRouteModeUI);
+syncRouteModeUI();
+
 /* ---------- Slider bindings ---------- */
 function bindSlider(id, valId, fmt = (v) => v, onChange = null) {
   const el = $(id), out = $(valId);
@@ -709,6 +736,98 @@ function buildPartition(W, D, nx, ny) {
   return piece;
 }
 
+/* Scalar-field clipping helpers used by the full-depth route. The route and
+   its slightly wider channel are cut from the same interpolated distance
+   field, so their walls follow one another without overlapping. */
+const THROUGH_ROUTE_HALF = 1.6;
+const THROUGH_CHANNEL_HALF = 1.8;
+const THROUGH_ROUTE_RAISE = 0.6;
+const CLIP_EPS = 1e-7;
+
+function meshTri(mesh, a, b, c) {
+  const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+  const vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+  let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const len = Math.hypot(nx, ny, nz);
+  if (len < 1e-10) return;
+  nx /= len; ny /= len; nz /= len;
+  mesh.pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  if (mesh.nrm) mesh.nrm.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
+}
+
+function lerpClipVertex(a, b, t) {
+  const v = {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    z: a.z + (b.z - a.z) * t,
+    d: a.d + (b.d - a.d) * t,
+  };
+  if (a.bottom !== undefined && b.bottom !== undefined)
+    v.bottom = a.bottom + (b.bottom - a.bottom) * t;
+  return v;
+}
+
+function clipScalarPolygon(vertices, threshold, keepInside) {
+  const keep = v => keepInside ? v.d <= threshold + CLIP_EPS : v.d >= threshold - CLIP_EPS;
+  const out = [];
+  for (let i = 0; i < vertices.length; i++) {
+    const a = vertices[i], b = vertices[(i + 1) % vertices.length];
+    const aIn = keep(a), bIn = keep(b);
+    if (aIn) out.push(a);
+    if (aIn !== bIn) {
+      const den = b.d - a.d;
+      const t = Math.abs(den) < CLIP_EPS ? 0.5 : clamp((threshold - a.d) / den, 0, 1);
+      out.push(lerpClipVertex(a, b, t));
+    }
+  }
+  return out.filter((v, i) => {
+    const p = out[(i + out.length - 1) % out.length];
+    return !p || Math.hypot(v.x - p.x, v.y - p.y, v.z - p.z) > CLIP_EPS;
+  });
+}
+
+function clipScalarSegment(a, b, threshold, keepInside) {
+  const keep = v => keepInside ? v.d <= threshold + CLIP_EPS : v.d >= threshold - CLIP_EPS;
+  const aIn = keep(a), bIn = keep(b);
+  if (aIn && bIn) return [a, b];
+  if (!aIn && !bIn) return null;
+  const den = b.d - a.d;
+  const t = Math.abs(den) < CLIP_EPS ? 0.5 : clamp((threshold - a.d) / den, 0, 1);
+  const cut = lerpClipVertex(a, b, t);
+  return aIn ? [a, cut] : [cut, b];
+}
+
+// a→b follows a top-surface boundary with solid material on its left.
+function addVerticalWall(mesh, a, b, bottomOf) {
+  const ab = { x: a.x, y: a.y, z: bottomOf(a) };
+  const bb = { x: b.x, y: b.y, z: bottomOf(b) };
+  meshTri(mesh, a, ab, b);
+  meshTri(mesh, b, ab, bb);
+}
+
+function addClippedPrismTriangle(mesh, triangle, threshold, keepInside, bottomOf) {
+  const poly = clipScalarPolygon(triangle, threshold, keepInside);
+  if (poly.length < 3) return;
+  for (let k = 1; k + 1 < poly.length; k++) {
+    meshTri(mesh, poly[0], poly[k], poly[k + 1]);
+    const a = { ...poly[0], z: bottomOf(poly[0]) };
+    const b = { ...poly[k + 1], z: bottomOf(poly[k + 1]) };
+    const c = { ...poly[k], z: bottomOf(poly[k]) };
+    meshTri(mesh, a, b, c);
+  }
+  for (let k = 0; k < poly.length; k++) {
+    const a = poly[k], b = poly[(k + 1) % poly.length];
+    if (Math.abs(a.d - threshold) <= CLIP_EPS && Math.abs(b.d - threshold) <= CLIP_EPS)
+      addVerticalWall(mesh, a, b, bottomOf);
+  }
+}
+
+function addClippedBoundaryWall(mesh, a, b, threshold, keepInside, bottomOf) {
+  const edge = clipScalarSegment(a, b, threshold, keepInside);
+  if (edge && Math.hypot(edge[1].x - edge[0].x, edge[1].y - edge[0].y) > CLIP_EPS)
+    addVerticalWall(mesh, edge[0], edge[1], bottomOf);
+}
+
 /* ============================================================================
    HEIGHTFIELD + SOLID MESH GENERATION
    ============================================================================ */
@@ -768,14 +887,17 @@ async function buildModel(opts, onProgress) {
     }
   }
 
-  // --- stamp the route into the heightfield (ridge, groove, or inlay channel) ---
-  let rd = null; // inlay mode: per-vertex groove depth (m), used to build the insert
+  // --- stamp shallow modes, or build a distance field for the through-route ---
+  const throughRoute = opts.routeMode === 'through';
+  let rd = null;        // shallow inlay: per-vertex groove depth (m)
+  let routeDist = null; // through route: distance to route centerline (model mm)
   if (opts.routePath && opts.routePath.length > 1 && opts.routeMode !== 'off') {
-    onProgress('Stamping route…');
+    onProgress(throughRoute ? 'Cutting full-depth route…' : 'Stamping route…');
     const zSc = mmPerMeter * vex;
     const inlay = opts.routeMode === 'inlay';
     if (inlay) rd = new Float32Array(VW * VD);
-    const halfW = inlay ? 1.6 : 0.9;                          // half-width on the print (mm)
+    if (throughRoute) routeDist = new Float32Array(VW * VD);
+    const halfW = inlay ? 1.6 : 0.9;                          // shallow-mode half-width (mm)
     const dMM = inlay ? -1.2 : opts.routeMode === 'engrave' ? -0.8 : 1.0; // depth/height (mm)
     // route lat/lon → model mm (same mapping as vertex X/Y below)
     const seg = opts.routePath.map(([la, lo]) => [
@@ -795,7 +917,9 @@ async function buildModel(opts, onProgress) {
         for (let s = 0; s + 1 < seg.length && d > 0; s++) {
           d = Math.min(d, distToSeg(xv, yv, seg[s][0], seg[s][1], seg[s + 1][0], seg[s + 1][1]));
         }
-        if (d < halfW) {
+        if (throughRoute) {
+          routeDist[j * VW + i] = d;
+        } else if (d < halfW) {
           const f = 1 - (d / halfW) ** 2;                     // rounded cross-section
           const dE = (dMM * f) / zSc;
           Hv[j * VW + i] += dE;
@@ -803,9 +927,11 @@ async function buildModel(opts, onProgress) {
         }
       }
     }
-    // heights changed → refresh range so base offset and color bands stay aligned
-    minE = Infinity; maxE = -Infinity;
-    for (let k = 0; k < Hv.length; k++) { const e = Hv[k]; if (e < minE) minE = e; if (e > maxE) maxE = e; }
+    if (!throughRoute) {
+      // heights changed → refresh range so base offset and color bands stay aligned
+      minE = Infinity; maxE = -Infinity;
+      for (let k = 0; k < Hv.length; k++) { const e = Hv[k]; if (e < minE) minE = e; if (e > maxE) maxE = e; }
+    }
   }
 
   const zOf = e => baseMM + (e - minE) * mmPerMeter * vex;
@@ -841,34 +967,45 @@ async function buildModel(opts, onProgress) {
       // corner coords
       const x0 = X(i), x1 = X(i + 1), y0 = Y(j), y1 = Y(j + 1);
       const h00 = zOf(H(i, j)), h10 = zOf(H(i + 1, j)), h11 = zOf(H(i + 1, j + 1)), h01 = zOf(H(i, j + 1));
+      if (throughRoute && routeDist) {
+        const v00 = { x: x0, y: y0, z: h00, d: routeDist[j * VW + i] };
+        const v10 = { x: x1, y: y0, z: h10, d: routeDist[j * VW + i + 1] };
+        const v11 = { x: x1, y: y1, z: h11, d: routeDist[(j + 1) * VW + i + 1] };
+        const v01 = { x: x0, y: y1, z: h01, d: routeDist[(j + 1) * VW + i] };
+        const bottom = () => 0;
+        // Actual CCW top triangles; retain only terrain outside the channel.
+        addClippedPrismTriangle(P, [v00, v11, v10], THROUGH_CHANNEL_HALF, false, bottom);
+        addClippedPrismTriangle(P, [v00, v01, v11], THROUGH_CHANNEL_HALF, false, bottom);
+        // Cell perimeter in CCW order, with the cell interior on the left.
+        if (!inPiece(i - 1, j, p)) addClippedBoundaryWall(P, v00, v01, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inPiece(i, j + 1, p)) addClippedBoundaryWall(P, v01, v11, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inPiece(i + 1, j, p)) addClippedBoundaryWall(P, v11, v10, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inPiece(i, j - 1, p)) addClippedBoundaryWall(P, v10, v00, THROUGH_CHANNEL_HALF, false, bottom);
+      } else {
+        // TOP surface (two tris, normals up)
+        tri(P, x0, y0, h00, x1, y0, h10, x1, y1, h11);
+        tri(P, x0, y0, h00, x1, y1, h11, x0, y1, h01);
+        // BOTTOM (flat z=0, reversed winding)
+        tri(P, x0, y0, 0, x1, y1, 0, x1, y0, 0);
+        tri(P, x0, y0, 0, x0, y1, 0, x1, y1, 0);
 
-      // TOP surface (two tris, normals up)
-      tri(P, x0, y0, h00, x1, y0, h10, x1, y1, h11);
-      tri(P, x0, y0, h00, x1, y1, h11, x0, y1, h01);
-      // BOTTOM (flat z=0, reversed winding)
-      tri(P, x0, y0, 0, x1, y1, 0, x1, y0, 0);
-      tri(P, x0, y0, 0, x0, y1, 0, x1, y1, 0);
-
-      // WALLS where neighbor is not same piece
-      // right edge (i+1): vertices (i+1,j)-(i+1,j+1)
-      if (!inPiece(i + 1, j, p)) {
-        tri(P, x1, y0, h10, x1, y0, 0, x1, y1, h11);
-        tri(P, x1, y1, h11, x1, y0, 0, x1, y1, 0);
-      }
-      // left edge (i)
-      if (!inPiece(i - 1, j, p)) {
-        tri(P, x0, y0, h00, x0, y1, h01, x0, y0, 0);
-        tri(P, x0, y1, h01, x0, y1, 0, x0, y0, 0);
-      }
-      // top edge in +j means j-1 neighbor (north). Edge (i,j)-(i+1,j) at y0
-      if (!inPiece(i, j - 1, p)) {
-        tri(P, x0, y0, h00, x0, y0, 0, x1, y0, h10);
-        tri(P, x1, y0, h10, x0, y0, 0, x1, y0, 0);
-      }
-      // bottom edge j+1 neighbor (south). Edge (i,j+1)-(i+1,j+1) at y1
-      if (!inPiece(i, j + 1, p)) {
-        tri(P, x0, y1, h01, x1, y1, h11, x0, y1, 0);
-        tri(P, x1, y1, h11, x1, y1, 0, x0, y1, 0);
+        // WALLS where neighbor is not same piece
+        if (!inPiece(i + 1, j, p)) {
+          tri(P, x1, y0, h10, x1, y0, 0, x1, y1, h11);
+          tri(P, x1, y1, h11, x1, y0, 0, x1, y1, 0);
+        }
+        if (!inPiece(i - 1, j, p)) {
+          tri(P, x0, y0, h00, x0, y1, h01, x0, y0, 0);
+          tri(P, x0, y1, h01, x0, y1, 0, x0, y0, 0);
+        }
+        if (!inPiece(i, j - 1, p)) {
+          tri(P, x0, y0, h00, x0, y0, 0, x1, y0, h10);
+          tri(P, x1, y0, h10, x0, y0, 0, x1, y0, 0);
+        }
+        if (!inPiece(i, j + 1, p)) {
+          tri(P, x0, y1, h01, x1, y1, h11, x0, y1, 0);
+          tri(P, x1, y1, h11, x1, y1, 0, x0, y1, 0);
+        }
       }
     }
   }
@@ -926,6 +1063,36 @@ async function buildModel(opts, onProgress) {
     routeParts = [...parts.values()].filter(R => R.pos.length);
     if (!routeParts.length) routeParts = null;
     else for (const R of routeParts) triCount += R.pos.length / 9;
+  } else if (throughRoute && routeDist) {
+    const continuous = opts.routeJoin === 'continuous';
+    const raise = opts.routeTop === 'raised' ? THROUGH_ROUTE_RAISE : 0;
+    const parts = new Map();
+    const active = (i, j) => i >= 0 && j >= 0 && i < W && j < D && !!cellShape[j * W + i];
+    const sameRoutePart = (i, j, p) => active(i, j) && (continuous || piece[j * W + i] === p);
+    for (let j = 0; j < D; j++) {
+      for (let i = 0; i < W; i++) {
+        if (!active(i, j)) continue;
+        const p = piece[j * W + i];
+        const key = continuous ? -1 : p;
+        let R = parts.get(key);
+        if (!R) { R = { pos: [], nrm: [], pid: continuous ? null : p }; parts.set(key, R); }
+        const x0 = X(i), x1 = X(i + 1), y0 = Y(j), y1 = Y(j + 1);
+        const v00 = { x: x0, y: y0, z: zOf(H(i, j)) + raise, d: routeDist[j * VW + i] };
+        const v10 = { x: x1, y: y0, z: zOf(H(i + 1, j)) + raise, d: routeDist[j * VW + i + 1] };
+        const v11 = { x: x1, y: y1, z: zOf(H(i + 1, j + 1)) + raise, d: routeDist[(j + 1) * VW + i + 1] };
+        const v01 = { x: x0, y: y1, z: zOf(H(i, j + 1)) + raise, d: routeDist[(j + 1) * VW + i] };
+        const bottom = () => 0;
+        addClippedPrismTriangle(R, [v00, v11, v10], THROUGH_ROUTE_HALF, true, bottom);
+        addClippedPrismTriangle(R, [v00, v01, v11], THROUGH_ROUTE_HALF, true, bottom);
+        if (!sameRoutePart(i - 1, j, p)) addClippedBoundaryWall(R, v00, v01, THROUGH_ROUTE_HALF, true, bottom);
+        if (!sameRoutePart(i, j + 1, p)) addClippedBoundaryWall(R, v01, v11, THROUGH_ROUTE_HALF, true, bottom);
+        if (!sameRoutePart(i + 1, j, p)) addClippedBoundaryWall(R, v11, v10, THROUGH_ROUTE_HALF, true, bottom);
+        if (!sameRoutePart(i, j - 1, p)) addClippedBoundaryWall(R, v10, v00, THROUGH_ROUTE_HALF, true, bottom);
+      }
+    }
+    routeParts = [...parts.values()].filter(R => R.pos.length);
+    if (!routeParts.length) routeParts = null;
+    else for (const R of routeParts) triCount += R.pos.length / 9;
   }
 
   // piece centroids (for exploded preview); clipped-away pieces may be empty
@@ -943,11 +1110,12 @@ async function buildModel(opts, onProgress) {
 
   return {
     pieces, routeParts, hasWater, nx, ny, W, D, minE, maxE, triCount,
+    routeMode: opts.routeMode, routeTop: opts.routeTop || 'flush', routeJoin: opts.routeJoin || 'piece',
     modelWidth, modelDepth,
     pieceW: modelWidth / nx, pieceH: modelDepth / ny,
     zoom: elevSrc.zoom,
     zCuts, maxZ, eStep,
-    grid: { Hv, piece, water, cellShape, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
+    grid: { Hv, piece, water, cellShape, routeDist, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
   };
 }
 
@@ -1062,7 +1230,8 @@ function showModel(model, keepCamera) {
   while (modelGroup.children.length) modelGroup.remove(modelGroup.children[0]);
 
   const cx = model.modelWidth / 2, cy = model.modelDepth / 2;
-  const gap = 1.10; // exploded factor to reveal jigsaw seams
+  // A continuous insert only aligns while the puzzle remains assembled.
+  const gap = model.routeMode === 'through' && model.routeJoin === 'continuous' ? 1 : 1.10;
 
   for (const P of model.pieces) {
     const geo = new THREE.BufferGeometry();
@@ -1083,8 +1252,10 @@ function showModel(model, keepCamera) {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(R.pos, 3));
       geo.setAttribute('normal', new THREE.Float32BufferAttribute(R.nrm, 3));
       const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ color: 0xe5534b, shininess: 20 }));
-      const P = model.pieces[R.pid];
-      mesh.position.set((P.cx - cx) * (gap - 1), (P.cy - cy) * (gap - 1), 0);
+      if (R.pid !== null) {
+        const P = model.pieces[R.pid];
+        mesh.position.set((P.cx - cx) * (gap - 1), (P.cy - cy) * (gap - 1), 0);
+      }
       modelGroup.add(mesh);
     }
   }
@@ -1141,12 +1312,15 @@ function pieceToBinarySTL(P) {
   return buf;
 }
 function combinedBinarySTL(model) {
-  let nTri = 0; for (const P of model.pieces) nTri += P.pos.length / 9;
+  // A full-depth insert is included as a separate seated shell; the clearance
+  // remains empty space inside the combined STL.
+  const sources = model.pieces.concat(model.routeMode === 'through' ? (model.routeParts || []) : []);
+  let nTri = 0; for (const P of sources) nTri += P.pos.length / 9;
   const buf = new ArrayBuffer(84 + nTri * 50);
   const dv = new DataView(buf);
   dv.setUint32(80, nTri, true);
   let o = 84;
-  for (const P of model.pieces) {
+  for (const P of sources) {
     const n = P.pos.length / 9;
     for (let t = 0; t < n; t++) {
       const pi = t * 9;
@@ -1180,14 +1354,29 @@ async function exportZip() {
     zip.file(`piece_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(P));
   }
   for (const R of state.model.routeParts || []) {
-    const col = R.pid % state.model.nx, row = Math.floor(R.pid / state.model.nx);
-    zip.file(`route_red_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(R));
+    if (R.pid === null) {
+      zip.file('route_red_continuous.stl', pieceToBinarySTL(R));
+    } else {
+      const col = R.pid % state.model.nx, row = Math.floor(R.pid / state.model.nx);
+      zip.file(`route_red_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(R));
+    }
   }
   if (state.model.frame) zip.file('frame_plate.stl', pieceToBinarySTL(frameMergedMesh(state.model.frame)));
+  const routeNote = !state.model.routeParts ? ''
+    : state.model.routeMode === 'through'
+      ? `The route_red_*.stl parts run the full depth of the print. Print them in red\n` +
+        `(or any contrast colour) and press them into the channels; each side has 0.2 mm\n` +
+        `of clearance.\n` +
+        (state.model.routeJoin === 'continuous'
+          ? `route_red_continuous.stl spans every piece, so seat it only once the puzzle\n` +
+            `is fully assembled.\n`
+          : '')
+      : `The route_red_*.stl parts are shallow inlays. Print them in red and press them\n` +
+        `into the grooves.\n`;
   zip.file('README.txt',
     `TopoPuzzle export\nPieces: ${state.model.nx} x ${state.model.ny}\n` +
     `Model size: ${state.model.modelWidth.toFixed(1)} x ${state.model.modelDepth.toFixed(1)} mm\n` +
-    `Print all pieces, then assemble the jigsaw. Tabs interlock by design.\n`);
+    `Print all pieces, then assemble the jigsaw. Tabs interlock by design.\n` + routeNote);
   const blob = await zip.generateAsync({ type: 'blob' });
   download(blob, 'topopuzzle_pieces.zip');
   setStatus('Downloaded topopuzzle_pieces.zip', 'ok');
@@ -1269,7 +1458,7 @@ $('exportFrame').addEventListener('click', gateDownload(() => {
 const WATER_CAP_MM = 0.8; // thickness of the blue water skin in the 3MF
 
 function buildBandSolidMesh(model, pieceId, band) {
-  const { Hv, piece, water, cellShape, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
+  const { Hv, piece, water, cellShape, routeDist, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
   const minE = model.minE;
   const zOf = e => baseMM + (e - minE) * zScale;
   const cLo = band === 0 ? 0 : model.zCuts[band - 1];
@@ -1288,6 +1477,8 @@ function buildBandSolidMesh(model, pieceId, band) {
   };
 
   const pos = [];
+  const mesh = { pos };
+  const cutThrough = model.routeMode === 'through' && routeDist;
   // Y(j) flips the grid's j axis, which mirrors orientation — emit as
   // (a, c, b) so faces wind outward (3MF requires CCW-outward triangles).
   const push = (ax, ay, az, bx, by, bz, cx, cy, cz) => pos.push(ax, ay, az, cx, cy, cz, bx, by, bz);
@@ -1298,28 +1489,42 @@ function buildBandSolidMesh(model, pieceId, band) {
       if (!inc(i, j)) continue;
       const x0 = X(i), x1 = X(i + 1), y0 = Y(j), y1 = Y(j + 1);
       const t00 = topV(i, j), t10 = topV(i + 1, j), t01 = topV(i, j + 1), t11 = topV(i + 1, j + 1);
-      // top
-      push(x0, y0, t00, x1, y0, t10, x1, y1, t11);
-      push(x0, y0, t00, x1, y1, t11, x0, y1, t01);
-      // bottom (reversed)
-      push(x0, y0, zb, x1, y1, zb, x1, y0, zb);
-      push(x0, y0, zb, x0, y1, zb, x1, y1, zb);
-      // walls where neighbor cell is absent from this band
-      if (!inc(i + 1, j)) {
-        push(x1, y0, t10, x1, y0, zb, x1, y1, t11);
-        push(x1, y1, t11, x1, y0, zb, x1, y1, zb);
-      }
-      if (!inc(i - 1, j)) {
-        push(x0, y0, t00, x0, y1, t01, x0, y0, zb);
-        push(x0, y1, t01, x0, y1, zb, x0, y0, zb);
-      }
-      if (!inc(i, j - 1)) {
-        push(x0, y0, t00, x0, y0, zb, x1, y0, t10);
-        push(x1, y0, t10, x0, y0, zb, x1, y0, zb);
-      }
-      if (!inc(i, j + 1)) {
-        push(x0, y1, t01, x1, y1, t11, x0, y1, zb);
-        push(x1, y1, t11, x1, y1, zb, x0, y1, zb);
+      if (cutThrough) {
+        const v00 = { x: x0, y: y0, z: t00, d: routeDist[j * VW + i] };
+        const v10 = { x: x1, y: y0, z: t10, d: routeDist[j * VW + i + 1] };
+        const v11 = { x: x1, y: y1, z: t11, d: routeDist[(j + 1) * VW + i + 1] };
+        const v01 = { x: x0, y: y1, z: t01, d: routeDist[(j + 1) * VW + i] };
+        const bottom = () => zb;
+        addClippedPrismTriangle(mesh, [v00, v11, v10], THROUGH_CHANNEL_HALF, false, bottom);
+        addClippedPrismTriangle(mesh, [v00, v01, v11], THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i - 1, j)) addClippedBoundaryWall(mesh, v00, v01, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i, j + 1)) addClippedBoundaryWall(mesh, v01, v11, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i + 1, j)) addClippedBoundaryWall(mesh, v11, v10, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i, j - 1)) addClippedBoundaryWall(mesh, v10, v00, THROUGH_CHANNEL_HALF, false, bottom);
+      } else {
+        // top
+        push(x0, y0, t00, x1, y0, t10, x1, y1, t11);
+        push(x0, y0, t00, x1, y1, t11, x0, y1, t01);
+        // bottom (reversed)
+        push(x0, y0, zb, x1, y1, zb, x1, y0, zb);
+        push(x0, y0, zb, x0, y1, zb, x1, y1, zb);
+        // walls where neighbor cell is absent from this band
+        if (!inc(i + 1, j)) {
+          push(x1, y0, t10, x1, y0, zb, x1, y1, t11);
+          push(x1, y1, t11, x1, y0, zb, x1, y1, zb);
+        }
+        if (!inc(i - 1, j)) {
+          push(x0, y0, t00, x0, y1, t01, x0, y0, zb);
+          push(x0, y1, t01, x0, y1, zb, x0, y0, zb);
+        }
+        if (!inc(i, j - 1)) {
+          push(x0, y0, t00, x0, y0, zb, x1, y0, t10);
+          push(x1, y0, t10, x0, y0, zb, x1, y0, zb);
+        }
+        if (!inc(i, j + 1)) {
+          push(x0, y1, t01, x1, y1, t11, x0, y1, zb);
+          push(x1, y1, t11, x1, y1, zb, x0, y1, zb);
+        }
       }
     }
   }
@@ -1329,7 +1534,7 @@ function buildBandSolidMesh(model, pieceId, band) {
 /* Thin blue skin over water cells of one piece: bottom = surface − cap depth
    (tapering to zero at the shore), top = terrain surface. */
 function buildWaterCapMesh(model, pieceId) {
-  const { Hv, piece, water, cellShape, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
+  const { Hv, piece, water, cellShape, routeDist, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
   const zOf = e => baseMM + (e - model.minE) * zScale;
   const X = i => i * dx, Y = j => modelDepth - j * dy;
   const top = (i, j) => zOf(Hv[j * VW + i]);
@@ -1340,6 +1545,8 @@ function buildWaterCapMesh(model, pieceId) {
     (dep(i, j) > 0 || dep(i + 1, j) > 0 || dep(i, j + 1) > 0 || dep(i + 1, j + 1) > 0);
 
   const pos = [];
+  const mesh = { pos };
+  const cutThrough = model.routeMode === 'through' && routeDist;
   // same (a, c, b) flip as the other emitters so faces wind outward
   const push = (ax, ay, az, bx, by, bz, cx, cy, cz) => pos.push(ax, ay, az, cx, cy, cz, bx, by, bz);
 
@@ -1349,28 +1556,42 @@ function buildWaterCapMesh(model, pieceId) {
       const x0 = X(i), x1 = X(i + 1), y0 = Y(j), y1 = Y(j + 1);
       const t00 = top(i, j), t10 = top(i + 1, j), t01 = top(i, j + 1), t11 = top(i + 1, j + 1);
       const b00 = bot(i, j), b10 = bot(i + 1, j), b01 = bot(i, j + 1), b11 = bot(i + 1, j + 1);
-      // top
-      push(x0, y0, t00, x1, y0, t10, x1, y1, t11);
-      push(x0, y0, t00, x1, y1, t11, x0, y1, t01);
-      // bottom (reversed)
-      push(x0, y0, b00, x1, y1, b11, x1, y0, b10);
-      push(x0, y0, b00, x0, y1, b01, x1, y1, b11);
-      // walls where the cap ends (degenerate zero-height quads get deduped away)
-      if (!inc(i + 1, j)) {
-        push(x1, y0, t10, x1, y0, b10, x1, y1, t11);
-        push(x1, y1, t11, x1, y0, b10, x1, y1, b11);
-      }
-      if (!inc(i - 1, j)) {
-        push(x0, y0, t00, x0, y1, t01, x0, y0, b00);
-        push(x0, y1, t01, x0, y1, b01, x0, y0, b00);
-      }
-      if (!inc(i, j - 1)) {
-        push(x0, y0, t00, x0, y0, b00, x1, y0, t10);
-        push(x1, y0, t10, x0, y0, b00, x1, y0, b10);
-      }
-      if (!inc(i, j + 1)) {
-        push(x0, y1, t01, x1, y1, t11, x0, y1, b01);
-        push(x1, y1, t11, x1, y1, b11, x0, y1, b01);
+      if (cutThrough) {
+        const v00 = { x: x0, y: y0, z: t00, bottom: b00, d: routeDist[j * VW + i] };
+        const v10 = { x: x1, y: y0, z: t10, bottom: b10, d: routeDist[j * VW + i + 1] };
+        const v11 = { x: x1, y: y1, z: t11, bottom: b11, d: routeDist[(j + 1) * VW + i + 1] };
+        const v01 = { x: x0, y: y1, z: t01, bottom: b01, d: routeDist[(j + 1) * VW + i] };
+        const bottom = v => v.bottom;
+        addClippedPrismTriangle(mesh, [v00, v11, v10], THROUGH_CHANNEL_HALF, false, bottom);
+        addClippedPrismTriangle(mesh, [v00, v01, v11], THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i - 1, j)) addClippedBoundaryWall(mesh, v00, v01, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i, j + 1)) addClippedBoundaryWall(mesh, v01, v11, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i + 1, j)) addClippedBoundaryWall(mesh, v11, v10, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i, j - 1)) addClippedBoundaryWall(mesh, v10, v00, THROUGH_CHANNEL_HALF, false, bottom);
+      } else {
+        // top
+        push(x0, y0, t00, x1, y0, t10, x1, y1, t11);
+        push(x0, y0, t00, x1, y1, t11, x0, y1, t01);
+        // bottom (reversed)
+        push(x0, y0, b00, x1, y1, b11, x1, y0, b10);
+        push(x0, y0, b00, x0, y1, b01, x1, y1, b11);
+        // walls where the cap ends (degenerate zero-height quads get deduped away)
+        if (!inc(i + 1, j)) {
+          push(x1, y0, t10, x1, y0, b10, x1, y1, t11);
+          push(x1, y1, t11, x1, y0, b10, x1, y1, b11);
+        }
+        if (!inc(i - 1, j)) {
+          push(x0, y0, t00, x0, y1, t01, x0, y0, b00);
+          push(x0, y1, t01, x0, y1, b01, x0, y0, b00);
+        }
+        if (!inc(i, j - 1)) {
+          push(x0, y0, t00, x0, y0, b00, x1, y0, t10);
+          push(x1, y0, t10, x0, y0, b00, x1, y0, b10);
+        }
+        if (!inc(i, j + 1)) {
+          push(x0, y1, t01, x1, y1, t11, x0, y1, b01);
+          push(x1, y1, t11, x1, y1, b11, x0, y1, b01);
+        }
       }
     }
   }
@@ -1706,6 +1927,35 @@ async function exportBambu() {
       }
     }
 
+    // A continuous through-route cannot inherit the transforms of individually
+    // spaced puzzle pieces. Export it as its own red object below the grid.
+    const continuousRoute = model.routeMode === 'through' && model.routeJoin === 'continuous'
+      ? (model.routeParts || []).find(r => r.pid === null) : null;
+    if (continuousRoute) {
+      const routeMeshId = nextId++;
+      const routeXml = meshObjectXML(routeMeshId, continuousRoute.pos, routePindex, 'route_continuous');
+      if (routeXml) {
+        res.push(routeXml);
+        const routeObjectId = nextId++;
+        res.push(`<object id="${routeObjectId}" type="model" name="route_continuous"><components>` +
+          `<component objectid="${routeMeshId}"/></components></object>`);
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (let k = 0; k < continuousRoute.pos.length; k += 3) {
+          minX = Math.min(minX, continuousRoute.pos[k]); maxX = Math.max(maxX, continuousRoute.pos[k]);
+          minY = Math.min(minY, continuousRoute.pos[k + 1]); maxY = Math.max(maxY, continuousRoute.pos[k + 1]);
+        }
+        const routeCx = (minX + maxX) / 2, routeCy = (minY + maxY) / 2;
+        let targetY = 128 - ((model.ny + 1) / 2) * pitchY - (maxY - minY) / 2;
+        if (model.frame) targetY -= model.frame.halfY * 2 + model.pieceH;
+        items.push(`<item objectid="${routeObjectId}" transform="1 0 0 0 1 0 0 0 1 ${fmtN(128 - routeCx)} ${fmtN(targetY - routeCy)} 0" printable="1"/>`);
+        projectObjects.push({
+          id: routeObjectId,
+          name: 'route_continuous',
+          parts: [{ id: routeMeshId, name: 'route_continuous', extruder: routePindex + 1 }]
+        });
+      }
+    }
+
     const modelXml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
       '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" ' +
       'xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">' +
@@ -1800,6 +2050,8 @@ async function generate() {
       widthMM: parseFloat($('width').value),
       baseMM: parseFloat($('base').value),
       routeMode: $('routeMode').value,
+      routeTop: $('routeTop').value,
+      routeJoin: $('routeJoin').value,
       frameStyle: currentPrintShape(),
       routePath: (() => {
         let path = route.pts.length > 1 ? route.pts
