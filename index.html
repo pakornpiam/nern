@@ -1583,6 +1583,9 @@ function buildFrameMesh(modelWidth, modelDepth, style, text, o) {
 }
 
 const fmtN = v => (Math.round(v * 1000) / 1000).toString();
+const xmlAttr = v => String(v).replace(/[&<>"']/g, ch => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;'
+}[ch]));
 
 /* Triangle soup → indexed 3MF <object> XML (vertices deduped at 1 µm). */
 function meshObjectXML(id, pos, pindex, name) {
@@ -1616,15 +1619,31 @@ async function exportBambu() {
     const model = state.model;
     const bandNames = ['low', 'mid-low', 'mid-high', 'peak'];
     const res = ['<basematerials id="1">'];
+    const filamentColors = [];
     for (let k = 0; k < 4; k++) {
-      res.push(`<base name="band${k + 1}_${bandNames[k]}" displaycolor="${$('col' + k).value.toUpperCase()}FF"/>`);
+      const color = $('col' + k).value.toUpperCase();
+      filamentColors.push(color);
+      res.push(`<base name="band${k + 1}_${bandNames[k]}" displaycolor="${color}FF"/>`);
     }
     let nextP = 4, routePindex = -1, waterPindex = -1, platePindex = -1, textPindex = -1;
-    if (model.routeParts) { res.push('<base name="route_red" displaycolor="#E5534BFF"/>'); routePindex = nextP++; }
-    if (model.hasWater) { res.push(`<base name="water_blue" displaycolor="${WATER_HEX.toUpperCase()}FF"/>`); waterPindex = nextP++; }
+    if (model.routeParts) {
+      res.push('<base name="route_red" displaycolor="#E5534BFF"/>');
+      filamentColors.push('#E5534B'); routePindex = nextP++;
+    }
+    if (model.hasWater) {
+      const color = WATER_HEX.toUpperCase();
+      res.push(`<base name="water_blue" displaycolor="${color}FF"/>`);
+      filamentColors.push(color); waterPindex = nextP++;
+    }
     if (model.frame) {
-      res.push(`<base name="plate" displaycolor="${$('frameCol').value.toUpperCase()}FF"/>`); platePindex = nextP++;
-      if (model.frame.text) { res.push(`<base name="plate_text" displaycolor="${$('frameTextCol').value.toUpperCase()}FF"/>`); textPindex = nextP++; }
+      const plateColor = $('frameCol').value.toUpperCase();
+      res.push(`<base name="plate" displaycolor="${plateColor}FF"/>`);
+      filamentColors.push(plateColor); platePindex = nextP++;
+      if (model.frame.text) {
+        const textColor = $('frameTextCol').value.toUpperCase();
+        res.push(`<base name="plate_text" displaycolor="${textColor}FF"/>`);
+        filamentColors.push(textColor); textPindex = nextP++;
+      }
     }
     res.push('</basematerials>');
 
@@ -1632,74 +1651,122 @@ async function exportBambu() {
     const pieceObjs = [];
     for (const P of model.pieces) {
       const row = Math.floor(P.id / model.nx) + 1, col = P.id % model.nx + 1;
-      const comp = [];
+      const comp = [], parts = [];
       for (let b = 0; b < 4; b++) {
-        const xml = meshObjectXML(nextId, buildBandSolidMesh(model, P.id, b), b, `r${row}c${col}_band${b + 1}`);
-        if (xml) { res.push(xml); comp.push(nextId); nextId++; }
+        const name = `r${row}c${col}_band${b + 1}`;
+        const xml = meshObjectXML(nextId, buildBandSolidMesh(model, P.id, b), b, name);
+        if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: b + 1 }); nextId++; }
       }
       // this piece's segment of the red route inlay (5th material)
       const R = model.routeParts && model.routeParts.find(r => r.pid === P.id);
       if (R) {
-        const xml = meshObjectXML(nextId, R.pos, routePindex, `r${row}c${col}_route`);
-        if (xml) { res.push(xml); comp.push(nextId); nextId++; }
+        const name = `r${row}c${col}_route`;
+        const xml = meshObjectXML(nextId, R.pos, routePindex, name);
+        if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: routePindex + 1 }); nextId++; }
       }
       // this piece's blue water skin
       if (model.hasWater) {
-        const xml = meshObjectXML(nextId, buildWaterCapMesh(model, P.id), waterPindex, `r${row}c${col}_water`);
-        if (xml) { res.push(xml); comp.push(nextId); nextId++; }
+        const name = `r${row}c${col}_water`;
+        const xml = meshObjectXML(nextId, buildWaterCapMesh(model, P.id), waterPindex, name);
+        if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: waterPindex + 1 }); nextId++; }
       }
-      if (comp.length) pieceObjs.push({ id: nextId++, comp, P, row, col }); // skip clipped-away pieces
+      if (comp.length) pieceObjs.push({ id: nextId++, comp, parts, P, row, col }); // skip clipped-away pieces
     }
 
     // Piece objects (components) + build items laid out on a grid around plate
     // center (128,128). Pitch 2× piece size keeps tabs from overlapping.
-    const items = [];
+    const items = [], projectObjects = [];
     const pitchX = model.pieceW * 2, pitchY = model.pieceH * 2;
     for (const po of pieceObjs) {
       res.push(`<object id="${po.id}" type="model" name="piece_r${po.row}_c${po.col}"><components>` +
         po.comp.map(cid => `<component objectid="${cid}"/>`).join('') + '</components></object>');
       const tx = 128 + ((po.col - 1) - (model.nx - 1) / 2) * pitchX - po.P.cx;
       const ty = 128 + ((model.ny - 1) / 2 - (po.row - 1)) * pitchY - po.P.cy;
-      items.push(`<item objectid="${po.id}" transform="1 0 0 0 1 0 0 0 1 ${fmtN(tx)} ${fmtN(ty)} 0"/>`);
+      items.push(`<item objectid="${po.id}" transform="1 0 0 0 1 0 0 0 1 ${fmtN(tx)} ${fmtN(ty)} 0" printable="1"/>`);
+      projectObjects.push({ id: po.id, name: `piece_r${po.row}_c${po.col}`, parts: po.parts });
     }
 
     // frame plate as its own object (plate + text components), below the grid
     if (model.frame) {
-      const F = model.frame, comp = [];
+      const F = model.frame, comp = [], parts = [];
       const pXml = meshObjectXML(nextId, F.plate.pos, platePindex, 'frame_plate');
-      if (pXml) { res.push(pXml); comp.push(nextId); nextId++; }
+      if (pXml) { res.push(pXml); comp.push(nextId); parts.push({ id: nextId, name: 'frame_plate', extruder: platePindex + 1 }); nextId++; }
       if (F.text) {
         const tXml = meshObjectXML(nextId, F.text.pos, textPindex, 'frame_text');
-        if (tXml) { res.push(tXml); comp.push(nextId); nextId++; }
+        if (tXml) { res.push(tXml); comp.push(nextId); parts.push({ id: nextId, name: 'frame_text', extruder: textPindex + 1 }); nextId++; }
       }
       if (comp.length) {
-        res.push(`<object id="${nextId}" type="model" name="frame_plate"><components>` +
+        const frameObjectId = nextId;
+        res.push(`<object id="${frameObjectId}" type="model" name="frame_plate"><components>` +
           comp.map(cid => `<component objectid="${cid}"/>`).join('') + '</components></object>');
         const ty = 128 - ((model.ny + 1) / 2) * pitchY - F.halfY;
-        items.push(`<item objectid="${nextId}" transform="1 0 0 0 1 0 0 0 1 128 ${fmtN(ty)} 0"/>`);
+        items.push(`<item objectid="${frameObjectId}" transform="1 0 0 0 1 0 0 0 1 128 ${fmtN(ty)} 0" printable="1"/>`);
+        projectObjects.push({ id: frameObjectId, name: 'frame_plate', parts });
         nextId++;
       }
     }
 
     const modelXml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
-      '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' +
+      '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" ' +
+      'xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">' +
+      '<metadata name="Application">BambuStudio-01.09.07.52</metadata>' +
+      '<metadata name="BambuStudio:3mfVersion">1</metadata>' +
       `<resources>${res.join('')}</resources><build>${items.join('')}</build></model>`;
+
+    // Bambu Studio ignores standard 3MF base-material assignments when deciding
+    // which AMS slot a component should use. Its native sidecar maps each child
+    // mesh ("part") to a 1-based extruder; keep the core materials above as a
+    // portable fallback for other 3MF readers.
+    const settings = ['<?xml version="1.0" encoding="UTF-8"?>', '<config>'];
+    for (const obj of projectObjects) {
+      settings.push(`<object id="${obj.id}">`,
+        `<metadata key="name" value="${xmlAttr(obj.name)}"/>`,
+        '<metadata key="extruder" value="1"/>');
+      for (const part of obj.parts) {
+        settings.push(`<part id="${part.id}" subtype="normal_part">`,
+          `<metadata key="name" value="${xmlAttr(part.name)}"/>`,
+          `<metadata key="extruder" value="${part.extruder}"/>`,
+          '</part>');
+      }
+      settings.push('</object>');
+    }
+    settings.push('<plate>',
+      '<metadata key="plater_id" value="1"/>',
+      '<metadata key="plater_name" value="TopoPuzzle"/>',
+      '<metadata key="locked" value="false"/>');
+    for (const obj of projectObjects) {
+      settings.push('<model_instance>',
+        `<metadata key="object_id" value="${obj.id}"/>`,
+        '<metadata key="instance_id" value="0"/>',
+        `<metadata key="identify_id" value="${obj.id}"/>`,
+        '</model_instance>');
+    }
+    settings.push('</plate>', '</config>');
+    const modelSettingsXml = settings.join('');
+    const projectSettings = JSON.stringify({
+      version: '01.09.07.52',
+      from: 'project',
+      filament_colour: filamentColors
+    });
 
     const zip = new JSZip();
     zip.file('[Content_Types].xml',
       '<?xml version="1.0" encoding="UTF-8"?>' +
       '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
       '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
-      '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>');
+      '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>' +
+      '<Default Extension="config" ContentType="application/octet-stream"/></Types>');
     zip.folder('_rels').file('.rels',
       '<?xml version="1.0" encoding="UTF-8"?>' +
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
       '<Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>');
     zip.folder('3D').file('3dmodel.model', modelXml);
+    zip.folder('Metadata').file('model_settings.config', modelSettingsXml);
+    zip.folder('Metadata').file('project_settings.config', projectSettings);
 
-    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+    const blob = await zip.generateAsync({ type: 'blob', mimeType: 'model/3mf', compression: 'DEFLATE' });
     download(blob, 'topopuzzle_bambu_4color.3mf');
-    setStatus('Downloaded .3mf — open in Bambu Studio and map the 4 materials to AMS slots', 'ok');
+    setStatus('Downloaded .3mf — Bambu Studio will load each color band as a separate AMS filament', 'ok');
   } catch (e) {
     console.error(e);
     setStatus(e.message || '3MF export failed', 'err');
