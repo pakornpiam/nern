@@ -35,6 +35,20 @@
         <input id="search" type="text" data-i18n-placeholder="searchPlaceholder" placeholder="Search a place (e.g. Mount Fuji)" />
         <button id="searchBtn" data-i18n="searchGo">Go</button>
       </div>
+      <div class="search-row" style="margin-top:8px">
+        <button id="regionBtn" style="flex:1" data-i18n="regionSelect">▱ Add region / province</button>
+        <button id="regionFinish" style="display:none" data-i18n="regionFinish">✓ Finish</button>
+        <button id="regionClear" style="display:none" data-i18n="regionClear">Clear all</button>
+      </div>
+      <div class="hint" data-i18n="hintRegionSelect">Enter a region or province above and press this button, or leave the search empty and click the region on the map. The terrain will follow its administrative boundary.</div>
+      <div id="regionControls" class="region-controls" hidden>
+        <label class="row" for="regionMode"><span data-i18n="regionOutputMode">Multiple-region output</span></label>
+        <select id="regionMode">
+          <option value="combined" selected data-i18n="regionCombined">Combined — one model</option>
+          <option value="separate" data-i18n="regionSeparate">Separate — one model per region</option>
+        </select>
+        <div id="regionList" class="region-list"></div>
+      </div>
       <div class="hint" data-i18n="hintRecenter">Drag the green box to move the puzzle area, or drag a corner to resize it. Click anywhere else on the map to recentre.</div>
       <div class="search-row" style="margin-top:8px">
         <input id="gpxFile" type="file" accept=".gpx" style="display:none" />
@@ -92,9 +106,10 @@
     <div class="group">
       <h2 data-i18n="g2Title">2 · Puzzle</h2>
       <div class="two-col">
-        <div><label class="row" style="margin:0 0 4px" data-i18n="lblPiecesAcross">Pieces across</label><input id="nx" type="number" min="1" max="8" value="3" /></div>
-        <div><label class="row" style="margin:0 0 4px" data-i18n="lblPiecesDown">Pieces down</label><input id="ny" type="number" min="1" max="8" value="3" /></div>
+        <div><label class="row" style="margin:0 0 4px" data-i18n="lblPiecesAcross">Pieces across</label><input id="nx" type="number" min="1" max="8" value="1" /></div>
+        <div><label class="row" style="margin:0 0 4px" data-i18n="lblPiecesDown">Pieces down</label><input id="ny" type="number" min="1" max="8" value="1" /></div>
       </div>
+      <div class="hint" data-i18n="hintSinglePiece">The 1 × 1 default is a single terrain model with no puzzle cuts.</div>
       <label class="row"><span data-i18n="lblDetail">Detail (grid)</span> <span class="val"><span id="resVal">140</span>²</span></label>
       <input id="res" type="range" min="60" max="240" value="140" step="10" />
       <label class="row"><span data-i18n="lblVex">Vertical exaggeration</span> <span class="val">×<span id="vexVal">1.6</span></span></label>
@@ -103,7 +118,7 @@
 
     <div class="group">
       <h2 data-i18n="g3Title">3 · Print size</h2>
-      <label class="row"><span data-i18n="lblWidth">Overall width</span> <span class="val"><span id="widthVal">180</span> mm</span></label>
+      <label class="row"><span data-i18n="lblWidth">Maximum model size</span> <span class="val"><span id="widthVal">180</span> mm</span></label>
       <input id="width" type="range" min="60" max="300" value="180" step="5" />
       <label class="row"><span data-i18n="lblBase">Base thickness</span> <span class="val"><span id="baseVal">3</span> mm</span></label>
       <input id="base" type="range" min="1" max="10" value="3" step="0.5" />
@@ -113,7 +128,8 @@
       <h2 data-i18n="g4Title">4 · Colors (Bambu AMS)</h2>
       <label class="row" for="waterLevel"><span data-i18n="lblWaterLevel">Water level</span> <span class="val"><span id="waterLevelVal">0.3</span> <span data-i18n="unitM">m</span></span></label>
       <input id="waterLevel" type="number" min="-500" max="9000" step="0.1" value="0.3" />
-      <div class="hint" data-i18n="hintWater">Everything at or below this height prints in the water colour, together with the lakes and rivers OpenStreetMap knows about. The surface keeps its relief — it is painted, not flattened.</div>
+      <label class="band-check" style="margin-top:6px"><input id="waterFlatten" type="checkbox" /><span data-i18n="lblWaterFlatten">Flatten the water surface</span></label>
+      <div class="hint" id="hintWater">Everything at or below this height prints in the water colour, together with the lakes and rivers OpenStreetMap knows about. The surface keeps its relief — it is painted, not flattened.</div>
 
       <div class="band-list" id="bandList" style="margin-top:8px">
         <div class="band-row" id="waterRow" hidden>
@@ -279,8 +295,13 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const state = {
   center: { lat: 35.3606, lon: 138.7274 }, // Mt Fuji
   areaKm: 24,
+  selectedRegions: [],
+  regionOutputMode: 'combined',
+  regionPicking: false,
   model: null, // built geometry package
+  models: [],  // one combined model, or one independently scaled model per region
   waterLevelM: 0.3, // mirrors #waterLevel; everything at or below prints as water
+  net: { elevation: new Map(), water: new Map() },
   /* Authoritative elevation-band boundaries, in METRES. The model's zCuts are a
      derived cache. These boot values make updateLegend() emit the same four even
      stripes the old fixed-quarter legend did, before any model exists. */
@@ -335,11 +356,26 @@ function boundsFromCenter(lat, lon, km) {
   return [[lat - dLat, lon - dLon], [lat + dLat, lon + dLon]];
 }
 
+function currentAreaBounds() {
+  if (state.selectedRegions.length) return unionRegionBounds(state.selectedRegions);
+  return boundsFromCenter(state.center.lat, state.center.lon, state.areaKm);
+}
+
+function unionRegionBounds(regions) {
+  let s = Infinity, w = Infinity, n = -Infinity, e = -Infinity;
+  for (const r of regions) {
+    s = Math.min(s, r.bounds[0][0]); w = Math.min(w, r.bounds[0][1]);
+    n = Math.max(n, r.bounds[1][0]); e = Math.max(e, r.bounds[1][1]);
+  }
+  return [[s, w], [n, e]];
+}
+
 /* Single write-through for the area. State, the lat/lon inputs and the slider
    have to move together: bindSlider listens on 'input' and re-reads the DOM as
    the source of truth, so an update that skipped $('area').value would be
    silently undone the next time the slider is touched. */
 function setArea(lat, lon, km, skipHandle) {
+  if (state.selectedRegions.length) clearRegions(true);
   state.center.lat = +lat.toFixed(4);
   state.center.lon = +lon.toFixed(4);
   $('lat').value = state.center.lat;
@@ -413,6 +449,8 @@ function placeBoxHandles(skip) {
 function bindBoxMove() {
   const el = boxRect.getElement();
   if (!el) return;
+  if (el.dataset.tpBoxMove) return;
+  el.dataset.tpBoxMove = '1';
   el.style.touchAction = 'none';        // or the browser pans the page instead
   el.addEventListener('pointerdown', ev => {
     if (route.drawing) return;
@@ -442,6 +480,280 @@ function bindBoxMove() {
   });
 }
 
+/* ============================================================================
+   ADMINISTRATIVE REGION SELECTION
+
+   Nominatim returns GeoJSON rings in lon/lat order. Keep those coordinates for
+   generation (so the terrain really follows the boundary) and let Leaflet draw
+   the same GeoJSON as visual confirmation. polygon_threshold keeps large
+   provincial relations small enough for an interactive point-in-polygon pass.
+   ============================================================================ */
+const REGION_COLORS = ['#ffb454', '#4dd0a7', '#65a9ff', '#d58cff', '#ff718b', '#d7d85b', '#54d2d2', '#ff8f5a'];
+
+function regionPolygonsOf(input) {
+  const g = input && input.type === 'Feature' ? input.geometry : input;
+  if (!g || !['Polygon', 'MultiPolygon'].includes(g.type)) return [];
+  const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+  return polys.map(rings => {
+    const clean = (rings || []).filter(r => r && r.length >= 4).map(r => r.map(p => [+p[0], +p[1]]));
+    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+    for (const ring of clean) for (const p of ring) {
+      if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) continue;
+      w = Math.min(w, p[0]); e = Math.max(e, p[0]);
+      s = Math.min(s, p[1]); n = Math.max(n, p[1]);
+    }
+    return { rings: clean, bbox: [w, s, e, n] };
+  }).filter(p => p.rings.length && p.bbox.every(Number.isFinite));
+}
+
+function pointInRing(lon, lat, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i], b = ring[j];
+    if ((a[1] > lat) !== (b[1] > lat) &&
+        lon < (b[0] - a[0]) * (lat - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+
+function pointInRegion(lon, lat, polygons) {
+  for (const p of polygons || []) {
+    const [w, s, e, n] = p.bbox;
+    if (lon < w || lon > e || lat < s || lat > n || !pointInRing(lon, lat, p.rings[0])) continue;
+    let inHole = false;
+    for (let r = 1; r < p.rings.length; r++) if (pointInRing(lon, lat, p.rings[r])) { inHole = true; break; }
+    if (!inHole) return true;
+  }
+  return false;
+}
+
+let nominatimTail = Promise.resolve(), nominatimLastAt = 0;
+function nominatimJSON(url) {
+  const run = async () => {
+    const wait = Math.max(0, 1000 - (Date.now() - nominatimLastAt));
+    if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+    try {
+      const r = await fetch(url, { headers: { 'Accept': 'application/json', 'Accept-Language': tpLang() } });
+      if (!r.ok) throw new Error(t('errSearchFailed'));
+      return r.json();
+    } finally { nominatimLastAt = Date.now(); }
+  };
+  const request = nominatimTail.then(run, run);
+  nominatimTail = request.catch(() => {});
+  return request;
+}
+
+const isBoundaryResult = r => r && r.geojson && ['Polygon', 'MultiPolygon'].includes(r.geojson.type);
+
+async function regionByName(q) {
+  const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&addressdetails=1' +
+    '&polygon_geojson=1&polygon_threshold=0.001&q=' + encodeURIComponent(q);
+  const rows = await nominatimJSON(url);
+  return rows.find(isBoundaryResult) || null;
+}
+
+async function regionAt(lat, lon) {
+  // Zoom 5 normally resolves a state/province/region. Zoom 8 is a county-level
+  // fallback for countries whose province equivalent sits lower in the tree.
+  for (const zoom of [5, 8]) {
+    const url = 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1' +
+      '&polygon_geojson=1&polygon_threshold=0.001&zoom=' + zoom +
+      '&lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lon);
+    const row = await nominatimJSON(url);
+    if (isBoundaryResult(row)) return row;
+  }
+  return null;
+}
+
+function setBoxVisible(show) {
+  if (show) {
+    if (boxRect && !map.hasLayer(boxRect)) { boxRect.addTo(map); bindBoxMove(); }
+    if (boxHandleLayer && !map.hasLayer(boxHandleLayer) && !route.drawing) boxHandleLayer.addTo(map);
+  } else {
+    if (boxRect && map.hasLayer(boxRect)) map.removeLayer(boxRect);
+    if (boxHandleLayer && map.hasLayer(boxHandleLayer)) map.removeLayer(boxHandleLayer);
+  }
+}
+
+function refreshRegionButton() {
+  $('regionBtn').textContent = t(state.regionPicking ? 'regionPick' : 'regionSelect');
+  $('regionBtn').title = state.regionPicking ? t('regionCancel') : '';
+  $('regionFinish').style.display = state.regionPicking ? '' : 'none';
+}
+
+function setRegionPicking(on) {
+  state.regionPicking = !!on;
+  if (state.regionPicking && route.drawing) setDrawing(false);
+  map.getContainer().style.cursor = state.regionPicking ? 'crosshair' : (route.drawing ? 'crosshair' : '');
+  refreshRegionButton();
+  if (state.regionPicking) setStatusKey('stRegionPick');
+}
+
+const regionIdOf = row => row.osm_type && row.osm_id
+  ? row.osm_type + ':' + row.osm_id : 'place:' + (row.place_id || row.display_name || Date.now());
+
+function refreshRegionList() {
+  const list = $('regionList'); list.textContent = '';
+  for (const r of state.selectedRegions) {
+    const item = document.createElement('div'); item.className = 'region-item';
+    const swatch = document.createElement('span'); swatch.className = 'region-swatch'; swatch.style.background = r.color;
+    const name = document.createElement('span'); name.className = 'region-name'; name.textContent = r.name; name.title = r.name;
+    const remove = document.createElement('button'); remove.className = 'region-remove';
+    remove.textContent = t('regionRemove'); remove.dataset.regionId = r.id;
+    remove.addEventListener('click', () => removeRegion(r.id));
+    item.append(swatch, name, remove); list.appendChild(item);
+  }
+  const any = state.selectedRegions.length > 0;
+  $('regionControls').hidden = !any;
+  $('regionClear').style.display = any ? '' : 'none';
+  $('regionMode').value = state.regionOutputMode;
+}
+
+function setExportEnabled(on) {
+  $('exportZip').disabled = !on; $('exportOne').disabled = !on; $('exportBambu').disabled = !on;
+  $('exportFrame').disabled = !on || !state.model || !state.model.frame;
+}
+
+function refreshExportLabels() {
+  const multi = isSeparateRegionOutput();
+  $('exportBambu').textContent = t(multi ? 'btnExportBambuMulti' : 'btnExportBambu');
+  $('exportZip').textContent = t(multi ? 'btnExportZipMulti' : 'btnExportZip');
+  $('exportOne').textContent = t(multi ? 'btnExportOneMulti' : 'btnExportOne');
+}
+
+function isSeparateRegionOutput() {
+  return state.regionOutputMode === 'separate' && state.selectedRegions.length > 0;
+}
+
+function invalidateGeneratedModels() {
+  state.model = null; state.models = [];
+  state.bands.ready = false;
+  $('elevStat').textContent = $('pieceStat').textContent = $('triStat').textContent = '—';
+  $('loStat').textContent = t('legendLow'); $('hiStat').textContent = t('legendHigh');
+  setExportEnabled(false); refreshBandUI(); updateLegend();
+  showRegionPreview();
+}
+
+function syncRegionAreaUI(fitMap) {
+  const any = state.selectedRegions.length > 0;
+  if (!any) return;
+  const bounds = unionRegionBounds(state.selectedRegions);
+  const b = L.latLngBounds(bounds), c = b.getCenter();
+  state.center.lat = +c.lat.toFixed(4); state.center.lon = +c.lng.toFixed(4);
+  $('lat').value = state.center.lat; $('lon').value = state.center.lon;
+  const wKm = haversine(c.lat, b.getWest(), c.lat, b.getEast()) / 1000;
+  const hKm = haversine(b.getSouth(), c.lng, b.getNorth(), c.lng) / 1000;
+  state.areaKm = Math.max(2, Math.ceil(Math.max(wKm, hKm)));
+  $('areaVal').textContent = state.areaKm;
+  $('area').disabled = true; $('lat').disabled = true; $('lon').disabled = true;
+  setBoxVisible(false);
+  if (fitMap) map.fitBounds(b.pad(0.05));
+}
+
+function addRegion(row) {
+  const id = regionIdOf(row);
+  const existing = state.selectedRegions.find(r => r.id === id);
+  if (existing) { setStatusKey('stRegionDuplicate', { place: existing.name }); return false; }
+  const polygons = regionPolygonsOf(row.geojson);
+  if (!polygons.length) throw new Error(t('errNoRegionBoundary'));
+  const color = REGION_COLORS[state.selectedRegions.length % REGION_COLORS.length];
+  const next = L.geoJSON(row.geojson, {
+    style: { color, weight: 3, fillColor: color, fillOpacity: 0.12 }, interactive: false
+  });
+  const b = next.getBounds();
+  if (!b.isValid()) throw new Error(t('errNoRegionBoundary'));
+  next.addTo(map);
+
+  const name = row.display_name || row.name || '';
+  const shortName = name.split(',').slice(0, 2).join(',');
+  state.selectedRegions.push({
+    id,
+    name: shortName || name,
+    geojson: row.geojson,
+    polygons,
+    bounds: [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]],
+    color,
+    layer: next,
+  });
+  // The current frame pockets only support rectangle/circle/hex footprints.
+  // Turn it off explicitly so an irregular province cannot be paired with a
+  // pocket it does not fit; selecting a frame later returns to box mode.
+  if (frameOn) {
+    frameOn = false;
+    $('frameTabOn').classList.remove('active'); $('frameTabOff').classList.add('active');
+    $('frameOpts').style.display = 'none'; $('noFrameOpts').style.display = '';
+    $('exportFrame').disabled = true;
+  }
+  refreshRegionList(); syncRegionAreaUI(true); invalidateGeneratedModels(); refreshExportLabels();
+  setStatusKey('stRegionSelected', { place: shortName || name, n: state.selectedRegions.length }, 'ok');
+  return true;
+}
+
+function removeRegion(id, silent = false) {
+  const i = state.selectedRegions.findIndex(r => r.id === id);
+  if (i < 0) return;
+  const [r] = state.selectedRegions.splice(i, 1);
+  if (r.layer) map.removeLayer(r.layer);
+  // Reassign palette colors so map, list and 3D stay synchronized after removal.
+  state.selectedRegions.forEach((x, k) => {
+    x.color = REGION_COLORS[k % REGION_COLORS.length];
+    if (x.layer) x.layer.setStyle({ color: x.color, fillColor: x.color });
+  });
+  refreshRegionList(); invalidateGeneratedModels(); refreshExportLabels();
+  if (state.selectedRegions.length) syncRegionAreaUI(true);
+  else restoreBoxArea();
+  if (!silent) setStatusKey('stRegionRemoved', { place: r.name, n: state.selectedRegions.length }, 'ok');
+}
+
+function restoreBoxArea() {
+  state.areaKm = clamp(state.areaKm, 2, 120);
+  $('area').value = state.areaKm; $('areaVal').textContent = state.areaKm;
+  $('area').disabled = false; $('lat').disabled = false; $('lon').disabled = false;
+  drawBox(); setBoxVisible(true);
+}
+
+function clearRegions(silent = false, keepPicking = false) {
+  if (!keepPicking) setRegionPicking(false);
+  if (!state.selectedRegions.length) return;
+  for (const r of state.selectedRegions) if (r.layer) map.removeLayer(r.layer);
+  state.selectedRegions = [];
+  refreshRegionList(); invalidateGeneratedModels(); refreshExportLabels(); restoreBoxArea();
+  if (!silent) setStatusKey('stRegionCleared');
+}
+
+async function selectNamedRegion(q) {
+  $('regionBtn').disabled = true; setStatusKey('stRegionLoading');
+  try {
+    const row = await regionByName(q);
+    if (!row) throw new Error(t('errNoRegionBoundary'));
+    addRegion(row);
+  } catch (e) { setStatus(e.message, 'err'); }
+  finally { $('regionBtn').disabled = false; }
+}
+
+async function selectRegionAt(lat, lon) {
+  if ($('regionBtn').disabled) return;
+  $('regionBtn').disabled = true; setStatusKey('stRegionLoading');
+  try {
+    const row = await regionAt(lat, lon);
+    if (!row) throw new Error(t('errNoRegionBoundary'));
+    addRegion(row);
+  } catch (e) { setStatus(e.message, 'err'); }
+  finally { $('regionBtn').disabled = false; }
+}
+
+$('regionBtn').addEventListener('click', () => {
+  const q = $('search').value.trim();
+  setRegionPicking(true);
+  if (q) selectNamedRegion(q);
+});
+$('regionFinish').addEventListener('click', () => setRegionPicking(false));
+$('regionClear').addEventListener('click', () => clearRegions(false, true));
+$('regionMode').addEventListener('change', () => {
+  state.regionOutputMode = $('regionMode').value === 'separate' ? 'separate' : 'combined';
+  invalidateGeneratedModels(); refreshExportLabels();
+});
+
 drawBox();
 buildBoxHandles();
 
@@ -450,7 +762,9 @@ map.on('mousedown', () => { boxDragged = false; });
 
 map.on('click', e => {
   if (boxDragged) { boxDragged = false; return; }   // trailing click from a box drag
+  if (state.regionPicking) { selectRegionAt(e.latlng.lat, e.latlng.lng); return; }
   if (route.drawing) { route.pts.push([e.latlng.lat, e.latlng.lng]); redrawRoute(); updateRouteButtons(); return; }
+  if (state.selectedRegions.length) return; // selection changes only through the region controls
   state.center.lat = +e.latlng.lat.toFixed(4);
   state.center.lon = +e.latlng.lng.toFixed(4);
   $('lat').value = state.center.lat;
@@ -461,6 +775,7 @@ map.on('click', e => {
 function syncCenterFromInputs() {
   const la = parseFloat($('lat').value), lo = parseFloat($('lon').value);
   if (Number.isFinite(la) && Number.isFinite(lo)) {
+    if (state.selectedRegions.length) return;
     state.center.lat = la; state.center.lon = lo; drawBox();
     map.panTo([la, lo]);
   }
@@ -471,9 +786,7 @@ $('lon').addEventListener('change', syncCenterFromInputs);
 /* ---------- Geocoding search (Nominatim) ---------- */
 async function geocode(q) {
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`;
-  const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
-  if (!r.ok) throw new Error(t('errSearchFailed'));
-  const j = await r.json();
+  const j = await nominatimJSON(url);
   if (!j.length) throw new Error(t('errNoResults', { query: q }));
   return { lat: parseFloat(j[0].lat), lon: parseFloat(j[0].lon), name: j[0].display_name };
 }
@@ -614,6 +927,7 @@ function refreshRouteBtn() {
   $('routeBtn').textContent = t(route.drawing ? 'routeFinish' : 'routeDraw');
 }
 function setDrawing(on) {
+  if (on && state.regionPicking) setRegionPicking(false);
   route.drawing = on;
   refreshRouteBtn();
   $('routeBtn').style.borderColor = on ? 'var(--accent)' : '';
@@ -702,10 +1016,15 @@ function bindSlider(id, valId, fmt = (v) => v, onChange = null) {
   const update = () => { out.textContent = fmt(el.value); if (onChange) onChange(el.value); };
   el.addEventListener('input', update); update();
 }
-bindSlider('area', 'areaVal', v => v, v => { state.areaKm = +v; drawBox(); });
+bindSlider('area', 'areaVal', v => v, v => {
+  if (state.selectedRegions.length) return;
+  state.areaKm = +v; drawBox();
+});
 bindSlider('res', 'resVal', v => v);
 bindSlider('vex', 'vexVal', v => (+v).toFixed(1));
-bindSlider('width', 'widthVal', v => v);
+bindSlider('width', 'widthVal', v => v, () => {
+  if (state.selectedRegions.length && !state.models.length) showRegionPreview(true);
+});
 bindSlider('base', 'baseVal', v => (+v));
 
 /* ============================================================================
@@ -721,16 +1040,19 @@ function latToTileY(lat, z) {
   return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z);
 }
 
-function chooseZoom(latMid, lonW, lonE, samples) {
+function chooseZoom(latN, latS, lonW, lonE, samples) {
+  const latMid = (latN + latS) / 2, lonMid = (lonW + lonE) / 2;
   const boxWidthM = haversine(latMid, lonW, latMid, lonE);
-  const mppTarget = boxWidthM / samples;
+  const boxHeightM = haversine(latN, lonMid, latS, lonMid);
+  const mppTarget = Math.max(boxWidthM, boxHeightM) / samples;
   const base = Math.log2(156543.03392 * Math.cos(latMid * Math.PI / 180) / mppTarget);
   let z = clamp(Math.round(base), 1, 14);
-  // Cap number of tiles fetched.
+  // Cap the TOTAL tile rectangle. This matters for tall/narrow provinces; the
+  // old square-area path only estimated one row around the midpoint.
   for (; z > 1; z--) {
     const txMin = Math.floor(lonToTileX(lonW, z)), txMax = Math.floor(lonToTileX(lonE, z));
-    const tyMin = Math.floor(latToTileY(latMid + 0.0001, z)), tyMax = Math.floor(latToTileY(latMid - 0.0001, z));
-    if ((txMax - txMin + 1) * (Math.abs(tyMax - tyMin) + 1) <= 36) break;
+    const tyMin = Math.floor(latToTileY(latN, z)), tyMax = Math.floor(latToTileY(latS, z));
+    if ((txMax - txMin + 1) * (tyMax - tyMin + 1) <= 36) break;
   }
   return z;
 }
@@ -756,7 +1078,7 @@ function loadImage(url) {
 async function fetchElevation(bounds, samples, onProgress) {
   const [[latS, lonW], [latN, lonE]] = bounds;
   const latMid = (latN + latS) / 2;
-  const z = chooseZoom(latMid, lonW, lonE, samples);
+  const z = chooseZoom(latN, latS, lonW, lonE, samples);
 
   const txMin = Math.floor(lonToTileX(lonW, z)), txMax = Math.floor(lonToTileX(lonE, z));
   const tyMin = Math.floor(latToTileY(latN, z)), tyMax = Math.floor(latToTileY(latS, z));
@@ -812,8 +1134,14 @@ async function fetchElevation(bounds, samples, onProgress) {
    WATER MASK — OSM water polygons (Overpass API), rasterized onto the
    vertex grid with even-odd scanline fill (handles islands and abutting
    riverbank polygons). Marks water[j*VW+i] = 1; returns true if any water.
+
+   Split in two so the halves can be cached separately: the Overpass response
+   depends on the bounds alone, while the raster also depends on the sample
+   resolution. fetchWaterRings therefore keeps its rings in lat/lon and leaves
+   every grid-space decision — including the sub-cell size drop — to the
+   rasterizer.
    ============================================================================ */
-async function fetchWaterMask(bounds, W, D, VW, VD, water) {
+async function fetchWaterRings(bounds) {
   const [[latS, lonW], [latN, lonE]] = bounds;
   const bbox = `${latS},${lonW},${latN},${lonE}`;
   const q = `[out:json][timeout:25];(way["natural"="water"](${bbox});relation["natural"="water"](${bbox});way["waterway"="riverbank"](${bbox}););out geom;`;
@@ -825,20 +1153,11 @@ async function fetchWaterMask(bounds, W, D, VW, VD, water) {
   if (!r.ok) throw new Error('Overpass ' + r.status);
   const j = await r.json();
 
-  const toGX = lon => (lon - lonW) / (lonE - lonW) * W;
-  const toGY = lat => (latN - lat) / (latN - latS) * D;
   const same = (a, b) => Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lon - b.lon) < 1e-7;
   const rings = [];
   const addRing = geom => {
     if (!geom || geom.length < 4 || !same(geom[0], geom[geom.length - 1])) return;
-    const ring = geom.map(pt => [toGX(pt.lon), toGY(pt.lat)]);
-    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-    for (const [x, y] of ring) {
-      x0 = Math.min(x0, x); x1 = Math.max(x1, x);
-      y0 = Math.min(y0, y); y1 = Math.max(y1, y);
-    }
-    if (x1 - x0 < 0.7 && y1 - y0 < 0.7) return; // smaller than a grid cell
-    rings.push(ring);
+    rings.push(geom.map(pt => [pt.lon, pt.lat]));
   };
   // multipolygon relations split their rings across several open member ways —
   // stitch segments end-to-end until they close
@@ -859,6 +1178,27 @@ async function fetchWaterMask(bounds, W, D, VW, VD, water) {
   for (const el of j.elements || []) {
     if (el.type === 'way') addRing(el.geometry);
     else if (el.type === 'relation') stitchRings((el.members || []).map(m => m.geometry));
+  }
+  return rings;
+}
+
+/* Rasterize lat/lon rings onto the vertex grid. All rings share one crossing
+   list per row and one global parity — that is what makes islands and abutting
+   riverbanks come out right, so they must not be filled ring by ring. */
+function rasterizeWaterRings(latLonRings, bounds, W, D, VW, VD, water) {
+  const [[latS, lonW], [latN, lonE]] = bounds;
+  const toGX = lon => (lon - lonW) / (lonE - lonW) * W;
+  const toGY = lat => (latN - lat) / (latN - latS) * D;
+  const rings = [];
+  for (const ll of latLonRings || []) {
+    const ring = ll.map(pt => [toGX(pt[0]), toGY(pt[1])]);
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [x, y] of ring) {
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x);
+      y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+    if (x1 - x0 < 0.7 && y1 - y0 < 0.7) continue; // smaller than a grid cell
+    rings.push(ring);
   }
   if (!rings.length) return false;
 
@@ -1058,61 +1398,101 @@ function addClippedBoundaryWall(mesh, a, b, threshold, keepInside, bottomOf) {
 /* ============================================================================
    HEIGHTFIELD + SOLID MESH GENERATION
    ============================================================================ */
-async function buildModel(opts, onProgress) {
-  const { bounds, samples, nx, ny, vex, widthMM, baseMM } = opts;
+/* Fetch and sample the elevation tiles. This half depends on both bounds and
+   resolution, while the raw Overpass rings below depend on bounds alone. */
+async function fetchElevationGrid(bounds, samples, onProgress) {
   const [[latS, lonW], [latN, lonE]] = bounds;
-
   // param is `n`, not `t` — `t` is the translation function
   const elevSrc = await fetchElevation(bounds, samples, (d, n) => onProgress(t('pgTiles', { done: d, total: n })));
 
   const W = samples, D = samples;          // cells
   const VW = W + 1, VD = D + 1;            // vertices
-  const Hv = new Float32Array(VW * VD);   // vertex elevations (m)
-  let minE = Infinity, maxE = -Infinity;
+  const Hv0 = new Float32Array(VW * VD);   // vertex elevations (m), never mutated
+  // NB: the range is taken from the sampled DOUBLE, before the Float32 store
+  // rounds it. Recomputing it from Hv0 afterwards would shift minE/maxE by an
+  // ulp and move every z in the model, so it is captured here and carried.
+  let minE0 = Infinity, maxE0 = -Infinity;
   for (let j = 0; j < VD; j++) {
     const lat = latN + (j / D) * (latS - latN);
     for (let i = 0; i < VW; i++) {
       const lon = lonW + (i / W) * (lonE - lonW);
       const e = elevSrc.sample(lat, lon);
-      Hv[j * VW + i] = e;
-      if (e < minE) minE = e; if (e > maxE) maxE = e;
+      Hv0[j * VW + i] = e;
+      if (e < minE0) minE0 = e; if (e > maxE0) maxE0 = e;
     }
   }
+
+  // Keep only the sampled grid. The decoded tile canvases behind elevSrc can
+  // now be collected instead of multiplying memory use for every region.
+  return { zoom: elevSrc.zoom, Hv0, bounds, samples, W, D, VW, VD, minE0, maxE0 };
+}
+
+/* Pure CPU and synchronous. onStep defaults to a no-op and the live rebuild path
+   passes nothing, so that path can never flash the progress overlay; only the
+   Generate path wires it up.
+   INVARIANT: nothing outside this function may write model.grid.Hv. */
+function buildGeometry(src, opts, onStep = () => {}) {
+  const { nx, ny, vex, widthMM, baseMM } = opts;
+  const { osmWater, bounds, W, D, VW, VD } = src;
+  const [[latS, lonW], [latN, lonE]] = bounds;
+
+  // a copy, so the pristine grid survives a destructive flatten
+  const Hv = src.Hv0.slice();
+  let minE = src.minE0, maxE = src.maxE0;
   if (!isFinite(minE)) { minE = 0; maxE = 1; }
   if (maxE - minE < 1) maxE = minE + 1;
 
-  // --- water detection: OSM lake/river polygons, kept raw ---
-  // The water level threshold is applied later (applyWaterLevel), after the route
-  // emboss may have moved heights, so that raising the level costs one array pass
-  // instead of another Overpass round-trip.
-  const osmWater = new Uint8Array(VW * VD);
   const water = new Uint8Array(VW * VD);
-  try {
-    onProgress(t('pgWater'));
-    await fetchWaterMask(bounds, W, D, VW, VD, osmWater);
-  } catch (e) { console.warn('Water lookup failed, continuing without it:', e); }
-
-  onProgress(t('pgPieces'));
   const piece = buildPartition(W, D, nx, ny);
 
   // --- physical scaling ---
   const boxWidthM = haversine((latN + latS) / 2, lonW, (latN + latS) / 2, lonE);
   const boxHeightM = haversine(latN, (lonW + lonE) / 2, latS, (lonW + lonE) / 2);
-  const modelWidth = widthMM;
-  const modelDepth = widthMM * (boxHeightM / boxWidthM);
-  const mmPerMeter = modelWidth / boxWidthM;
+  // A province can be much taller than it is wide. Keep its longest dimension
+  // within the requested print size; square/manual selections retain the exact
+  // historical width-based scaling.
+  const mmPerMeter = opts.regionPolygons && opts.regionPolygons.length
+    ? widthMM / Math.max(boxWidthM, boxHeightM) : widthMM / boxWidthM;
+  const modelWidth = boxWidthM * mmPerMeter;
+  const modelDepth = boxHeightM * mmPerMeter;
   const dx = modelWidth / W, dy = modelDepth / D;
 
   // --- clip the print to the frame-plate shape (circle / square / hex) ---
   const cellShape = new Uint8Array(W * D);
   {
-    const ins = shapeInsideFn(opts.frameStyle || 'none', modelWidth / 2, modelDepth / 2);
-    for (let j = 0; j < D; j++) {
-      const y = modelDepth - (j + 0.5) * dy - modelDepth / 2;
-      for (let i = 0; i < W; i++) {
-        cellShape[j * W + i] = ins((i + 0.5) * dx - modelWidth / 2, y) ? 1 : 0;
+    if (opts.regionPolygons && opts.regionPolygons.length) {
+      // Sample the administrative polygon at cell centres. The existing
+      // inPiece boundary-wall path then closes the stair-stepped outline into
+      // a printable solid, exactly as it does for circle/hex clipping.
+      for (let j = 0; j < D; j++) {
+        const lat = latN + ((j + 0.5) / D) * (latS - latN);
+        for (let i = 0; i < W; i++) {
+          const lon = lonW + ((i + 0.5) / W) * (lonE - lonW);
+          cellShape[j * W + i] = pointInRegion(lon, lat, opts.regionPolygons) ? 1 : 0;
+        }
+      }
+    } else {
+      const ins = shapeInsideFn(opts.frameStyle || 'none', modelWidth / 2, modelDepth / 2);
+      for (let j = 0; j < D; j++) {
+        const y = modelDepth - (j + 0.5) * dy - modelDepth / 2;
+        for (let i = 0; i < W; i++) {
+          cellShape[j * W + i] = ins((i + 0.5) * dx - modelWidth / 2, y) ? 1 : 0;
+        }
       }
     }
+  }
+
+  // --- flatten the water, before the route is stamped ---
+  // Running this after the emboss would erase any route crossing water — a river
+  // route, the likeliest case, would vanish. Before it, the groove is cut into
+  // the flat plane and the inlay's undo record still reconstructs it correctly.
+  if (opts.flattenWater) {
+    flattenWaterHeights(Hv, osmWater, opts.waterLevelM, VW, VD);
+    minE = Infinity; maxE = -Infinity;
+    for (let k = 0; k < Hv.length; k++) { const e = Hv[k]; if (e < minE) minE = e; if (e > maxE) maxE = e; }
+    // a fully flooded area collapses the range to zero, so re-apply the guards
+    if (!isFinite(minE)) { minE = 0; maxE = 1; }
+    if (maxE - minE < 1) maxE = minE + 1;
   }
 
   // --- stamp shallow modes, or build a distance field for the through-route ---
@@ -1120,7 +1500,7 @@ async function buildModel(opts, onProgress) {
   let rd = null;        // shallow inlay: per-vertex groove depth (m)
   let routeDist = null; // through route: distance to route centerline (model mm)
   if (opts.routePath && opts.routePath.length > 1 && opts.routeMode !== 'off') {
-    onProgress(t(throughRoute ? 'pgRouteThrough' : 'pgRoute'));
+    onStep(t(throughRoute ? 'pgRouteThrough' : 'pgRoute'));
     const zSc = mmPerMeter * vex;
     const inlay = opts.routeMode === 'inlay';
     if (inlay) rd = new Float32Array(VW * VD);
@@ -1159,6 +1539,12 @@ async function buildModel(opts, onProgress) {
       // heights changed → refresh range so base offset and color bands stay aligned
       minE = Infinity; maxE = -Infinity;
       for (let k = 0; k < Hv.length; k++) { const e = Hv[k]; if (e < minE) minE = e; if (e > maxE) maxE = e; }
+      // this recompute omits the degenerate-range guards; with a flat water
+      // plane the range really can collapse, so restore them
+      if (opts.flattenWater) {
+        if (!isFinite(minE)) { minE = 0; maxE = 1; }
+        if (maxE - minE < 1) maxE = minE + 1;
+      }
     }
   }
 
@@ -1334,11 +1720,12 @@ async function buildModel(opts, onProgress) {
   const maxZ = baseMM + (maxE - minE) * zScale;
 
   const model = {
-    pieces, routeParts, nx, ny, W, D, minE, maxE, triCount,
+    pieces, routeParts, nx, ny, W, D, minE, maxE, triCount, src, opts,
+    flatWater: !!opts.flattenWater,
     routeMode: opts.routeMode, routeTop: opts.routeTop || 'flush', routeJoin: opts.routeJoin || 'piece',
     modelWidth, modelDepth,
     pieceW: modelWidth / nx, pieceH: modelDepth / ny,
-    zoom: elevSrc.zoom,
+    zoom: src.zoom,
     maxZ,
     // filled in by applyWaterLevel + syncBandsToModel below
     hasWater: false, NB: 4, landMin: minE, waterLevelM: 0, bandCutsM: [], zCuts: [],
@@ -1347,6 +1734,52 @@ async function buildModel(opts, onProgress) {
   // Flood to the requested level now that the emboss (if any) has settled the heights.
   applyWaterLevel(model, opts.waterLevelM, opts.autoFallback);
   return model;
+}
+
+/* Cache the two network halves separately: Overpass depends on the bounds
+   alone, so a resolution change reuses the slow round-trip while refetching
+   tiles. A failed Overpass call is deliberately NOT cached — today a transient
+   429 self-heals on the next click, and caching the failure would freeze it for
+   the whole session. */
+const boundsKey = b => b[0][0].toFixed(7) + ',' + b[0][1].toFixed(7) + ',' +
+                       b[1][0].toFixed(7) + ',' + b[1][1].toFixed(7);
+
+async function getTerrainSources(bounds, samples, onProgress) {
+  const bKey = boundsKey(bounds);
+  const eKey = bKey + '|' + samples;
+  const c = state.net;
+
+  let elevation = c.elevation.get(eKey);
+  if (!elevation) {
+    elevation = await fetchElevationGrid(bounds, samples, onProgress);
+    c.elevation.set(eKey, elevation);
+  }
+
+  let rings = c.water.get(bKey);
+  if (!rings) {
+    onProgress(t('pgWater'));
+    try {
+      rings = await fetchWaterRings(bounds);
+      c.water.set(bKey, rings);
+    } catch (e) {
+      // Do not cache a failed request: Generate should retry it next time.
+      console.warn('Water lookup failed, continuing without it:', e);
+      rings = [];
+    }
+  }
+
+  // Rasterization is cheap and resolution-dependent, so derive it from the
+  // cached lat/lon rings each time an elevation grid is assembled.
+  const osmWater = new Uint8Array(elevation.VW * elevation.VD);
+  rasterizeWaterRings(rings, bounds, elevation.W, elevation.D,
+    elevation.VW, elevation.VD, osmWater);
+  return Object.assign({}, elevation, { osmWater });
+}
+
+async function buildModel(opts, onProgress) {
+  const src = await getTerrainSources(opts.bounds, opts.samples, onProgress);
+  onProgress(t('pgPieces'));
+  return buildGeometry(src, opts, onProgress);
 }
 
 /* ============================================================================
@@ -1388,7 +1821,8 @@ const evenCutsM = (lo, hi, nb) =>
    never more than an eighth of the span, so clamping can't invert the range. */
 function minGapM(lo, hi) {
   const span = Math.max(hi - lo, 1e-6);
-  const mm = state.model ? MIN_BAND_MM / state.model.grid.zScale : 0;
+  const mm = state.models.length
+    ? Math.max(...state.models.map(model => MIN_BAND_MM / model.grid.zScale)) : 0;
   return Math.min(Math.max(span / 1000, mm), span / 8);
 }
 
@@ -1408,6 +1842,151 @@ const fmtCut = v => (+v).toFixed(cutDecimals());
    trailing .0, so 0.3 stays 0.3 even when the bands round to whole metres. */
 const fmtLevel = v => (+v).toFixed(1).replace(/\.0$/, '');
 
+/* Water level, normalised once so buildGeometry and applyWaterLevel cannot drift. */
+const normLevel = L => (isFinite(L) ? L : 0.3);
+/* Hv is a Float32Array, so a level of 0.3 is stored as 0.30000001192… — which is
+   GREATER than the double 0.3. Flattening to the raw level and then testing
+   `Hv[v] <= level` would therefore mark none of it as water. Both the flatten
+   pass and the mask compare against the float32-rounded level so the two agree
+   exactly; the untouched (non-flatten) path keeps the raw comparison. */
+const levelF32 = L => Math.fround(normLevel(L));
+
+/* ---------------------------------------------------------------------------
+   FLATTEN SUPPORT — connected water bodies
+
+   The OSM mask is one undifferentiated raster: a lake at 2000 m and one at
+   400 m are indistinguishable in it. Flattening them to a single plane would
+   gouge a 1600 m hole, so each connected body is levelled to its own height.
+   --------------------------------------------------------------------------- */
+
+/* 4-connected components of a vertex-grid mask. Explicit stack, marked on PUSH,
+   so each vertex is queued exactly once and the stack can never exceed N —
+   recursion would overflow on a large lake. The column guards are load-bearing:
+   without them v±1 wraps across rows and merges a west-edge lake into an
+   unrelated east-edge one. */
+function labelBodies(mask, VW, VD) {
+  const N = VW * VD;
+  const label = new Int32Array(N).fill(-1);
+  const stack = new Int32Array(N);
+  const sizes = [];
+  for (let seed = 0; seed < N; seed++) {
+    if (!mask[seed] || label[seed] >= 0) continue;
+    const id = sizes.length;
+    let sp = 0, n = 0;
+    stack[sp++] = seed; label[seed] = id;
+    while (sp) {
+      const v = stack[--sp]; n++;
+      const i = v % VW;
+      if (i > 0      && mask[v - 1]  && label[v - 1]  < 0) { label[v - 1]  = id; stack[sp++] = v - 1; }
+      if (i < VW - 1 && mask[v + 1]  && label[v + 1]  < 0) { label[v + 1]  = id; stack[sp++] = v + 1; }
+      if (v >= VW    && mask[v - VW] && label[v - VW] < 0) { label[v - VW] = id; stack[sp++] = v - VW; }
+      if (v < N - VW && mask[v + VW] && label[v + VW] < 0) { label[v + VW] = id; stack[sp++] = v + VW; }
+    }
+    sizes.push(n);
+  }
+  return { label, sizes };
+}
+
+/* Lower median elevation per body, via CSR bucketing so the whole thing costs
+   one sort of the water set rather than a sort per lookup. The median (not the
+   mean) shrugs off a polygon that bleeds a few pixels onto the shore or catches
+   one anomalously deep sample; the LOWER median (not the midpoint of two) keeps
+   the result an actually-observed elevation, so a rebuild reproduces it exactly.
+   `vals` must stay a Float32Array — typed-array sort is numeric, Array sort is
+   lexicographic. */
+function bodyMedians(Hv, label, sizes) {
+  const nb = sizes.length;
+  const off = new Int32Array(nb + 1);
+  for (let b = 0; b < nb; b++) off[b + 1] = off[b] + sizes[b];
+  const cur = off.slice(0, nb);
+  const vals = new Float32Array(off[nb]);
+  for (let v = 0; v < label.length; v++) { const b = label[v]; if (b >= 0) vals[cur[b]++] = Hv[v]; }
+  const med = new Float32Array(nb);
+  for (let b = 0; b < nb; b++) {
+    const slice = vals.subarray(off[b], off[b + 1]);
+    slice.sort();
+    med[b] = slice[(slice.length - 1) >> 1];
+  }
+  return med;
+}
+
+/* Level each OSM body to its own median, then raise everything at or below the
+   water level onto one plane. Order matters and does the overlap reasoning for
+   free: a body whose median sits below the level is lifted by pass B and merges
+   into the flood plane; one above it stands proud as a perched lake; a body
+   straddling both is a single component, so a reservoir with a deep hole is not
+   carved in two.
+
+   It also leaves the water mask untouched: a vertex set to exactly lv still
+   satisfies `<= lv`, and OSM vertices match on the first disjunct either way —
+   so applyWaterLevel stays idempotent against the flattened grid, and landMin
+   (which skips water vertices) is unchanged. */
+function flattenWaterHeights(Hv, osmWater, level, VW, VD) {
+  const lv = levelF32(level);
+  const { label, sizes } = labelBodies(osmWater, VW, VD);
+  if (sizes.length) {
+    const med = bodyMedians(Hv, label, sizes);
+    for (let v = 0; v < Hv.length; v++) { const b = label[v]; if (b >= 0) Hv[v] = med[b]; }
+  }
+  for (let v = 0; v < Hv.length; v++) if (Hv[v] <= lv) Hv[v] = lv;
+}
+
+/* Cells whose whole quad is water. The cap and the band solids both key their
+   0.8 mm depression off this, which is what turns the shore into a vertical
+   step instead of a taper: a per-VERTEX depth cannot express a step on a shared
+   -vertex heightfield, but both emitters are per-cell triangle soups. */
+function buildCapCellMask(water, W, D, VW) {
+  const all = new Uint8Array(W * D), any = new Uint8Array(W * D);
+  for (let j = 0; j < D; j++) {
+    for (let i = 0; i < W; i++) {
+      const a = water[j * VW + i], b = water[j * VW + i + 1];
+      const c = water[(j + 1) * VW + i], d = water[(j + 1) * VW + i + 1];
+      const k = j * W + i;
+      all[k] = (a && b && c && d) ? 1 : 0;
+      any[k] = (a || b || c || d) ? 1 : 0;
+    }
+  }
+  // A ~1-cell-wide river can have no fully-wet cell at all and would silently
+  // lose its blue; keep fringe cells that have no fully-wet cell anywhere near.
+  const cap = all.slice();
+  for (let j = 0; j < D; j++) {
+    for (let i = 0; i < W; i++) {
+      const k = j * W + i;
+      if (cap[k] || !any[k]) continue;
+      let near = false;
+      for (let dj = -1; dj <= 1 && !near; dj++) {
+        for (let di = -1; di <= 1; di++) {
+          const jj = j + dj, ii = i + di;
+          if (ii >= 0 && jj >= 0 && ii < W && jj < D && all[jj * W + ii]) { near = true; break; }
+        }
+      }
+      if (!near) cap[k] = 1;
+    }
+  }
+
+  /* A diagonal 2x2 checkerboard makes four shoreline walls meet along one
+     vertical edge. That edge has four incident faces, so neither the cap nor
+     the band below it is a 2-manifold. Bridge one of the dry cells (preferring
+     one already touched by the vertex mask) and repeat because a bridge can
+     expose the same ambiguity in the next block. Only 0→1 changes are made, so
+     this always terminates and preserves thin water rather than eroding it. */
+  let changed;
+  do {
+    changed = false;
+    for (let j = 0; j + 1 < D; j++) {
+      for (let i = 0; i + 1 < W; i++) {
+        const a = j * W + i, b = a + 1, c = a + W, d = c + 1;
+        if (cap[a] && cap[d] && !cap[b] && !cap[c]) {
+          cap[any[b] ? b : c] = 1; changed = true;
+        } else if (cap[b] && cap[c] && !cap[a] && !cap[d]) {
+          cap[any[a] ? a : d] = 1; changed = true;
+        }
+      }
+    }
+  } while (changed);
+  return cap;
+}
+
 /* Lowest vertex that is NOT water — an OSM lake at 400 m must not push the split
    above a 350 m valley floor. With no water at all this is exactly minE, which is
    what keeps the no-water output identical to the old even quarter split. */
@@ -1424,10 +2003,12 @@ function landMinOf(Hv, water, minE, maxE, level) {
    Overpass call, no tile fetch, no geometry rebuild. */
 function applyWaterLevel(model, level, autoFallback) {
   const g = model.grid;
-  const lv = isFinite(level) ? level : 0.3;
+  const lv = normLevel(level);
+  // flatten stores the plane as a float32, so compare against the same value
+  const lvc = model.flatWater ? levelF32(lv) : lv;
   let any = false;
   for (let v = 0; v < g.water.length; v++) {
-    const w = (g.osmWater[v] || g.Hv[v] <= lv) ? 1 : 0;
+    const w = (g.osmWater[v] || g.Hv[v] <= lvc) ? 1 : 0;
     g.water[v] = w; if (w) any = true;
   }
   model.waterLevelM = lv;
@@ -1437,6 +2018,8 @@ function applyWaterLevel(model, level, autoFallback) {
   // no water → release the blue slot and go back to 4 land bands, unless the
   // user has turned that fallback off
   model.NB = (any || autoFallback === false) ? 3 : 4;
+  // null here is the single gate that keeps the whole pre-flatten export path
+  g.capCell = model.flatWater ? buildCapCellMask(g.water, g.W, g.D, g.VW) : null;
   return model;
 }
 
@@ -1467,6 +2050,25 @@ function syncBandsToModel(model) {
   model.zCuts = b.cutsM.map(e => g.baseMM + (e - model.minE) * g.zScale);
 }
 
+function aggregateModels(models) {
+  if (!models || !models.length) return null;
+  return {
+    landMin: Math.min(...models.map(m => m.landMin)),
+    minE: Math.min(...models.map(m => m.minE)),
+    maxE: Math.max(...models.map(m => m.maxE)),
+    hasWater: models.some(m => m.hasWater),
+    hasOsmWater: models.some(m => m.hasOsmWater),
+    NB: models.some(m => m.hasWater) || $('waterAuto').checked === false ? 3 : 4,
+  };
+}
+
+function reconcileAllModels(models) {
+  const aggregate = aggregateModels(models);
+  if (!aggregate) return;
+  reconcileBands(aggregate);
+  for (const model of models) { syncBandsToModel(model); recolorModel(model); }
+}
+
 /* Fill each piece's vertex-color array from vertex height → band color.
    Water surfaces (lake/sea areas) override the band with the water color. */
 function recolorModel(model) {
@@ -1479,7 +2081,7 @@ function recolorModel(model) {
       let c = cols[bandOfZ(P.pos[k + 2], model.zCuts)];
       if (model.hasWater) {
         const i = clamp(Math.round(P.pos[k] / g.dx), 0, g.W);
-        const j = clamp(Math.round((g.modelDepth - P.pos[k + 1]) / g.dy), 0, g.D);
+        const j = clamp(Math.round((model.modelDepth - P.pos[k + 1]) / g.dy), 0, g.D);
         if (g.water[j * g.VW + i]) {
           // only the top skin (surface + upper wall edge), not the full column
           const topZ = g.baseMM + (g.Hv[j * g.VW + i] - model.minE) * g.zScale;
@@ -1545,7 +2147,7 @@ const refreshBandUI = refreshBandRanges;
 
 /* The live path: derived cache → recolor → panel text. No geometry rebuild. */
 function applyBands() {
-  syncBandsToModel(state.model);
+  for (const model of state.models) syncBandsToModel(model);
   onColorChange();
   refreshBandRanges();
 }
@@ -1553,15 +2155,9 @@ function applyBands() {
 /* Live recolor when a picker changes. */
 function onColorChange() {
   updateLegend();
-  if (!state.model) return;
-  recolorModel(state.model);
-  if (!modelGroup) return;
-  modelGroup.children.forEach((mesh, i) => {
-    if (i >= state.model.pieces.length) return; // route insert: fixed red, no vertex colors
-    const attr = mesh.geometry.getAttribute('color');
-    attr.array.set(state.model.pieces[i].col);
-    attr.needsUpdate = true;
-  });
+  if (!state.models.length) { if (state.selectedRegions.length) showRegionPreview(true); return; }
+  for (const model of state.models) recolorModel(model);
+  showModels(state.models, true);
 }
 BAND_IDS.concat('colWater').forEach(id => $(id).addEventListener('input', onColorChange));
 
@@ -1590,6 +2186,56 @@ $('bandReset').addEventListener('click', () => {
   applyBands();
 });
 
+const flattenOn = () => $('waterFlatten').checked;
+function refreshWaterHint() { $('hintWater').textContent = t(flattenOn() ? 'hintWaterFlat' : 'hintWater'); }
+
+/* With flatten on the level moves geometry, not just colour, so the panel needs
+   a real rebuild. buildGeometry is CPU-only and the sources are already fetched,
+   so this costs no network — but it is not free either, hence the trailing
+   debounce (a leading edge would burn a build on the "1" of "1200"). */
+let rebuildTimer = 0, rebuildPending = false;
+function scheduleGeometryRebuild(delay = 120) {
+  rebuildPending = true;
+  clearTimeout(rebuildTimer);
+  rebuildTimer = setTimeout(() => { rebuildTimer = 0; rebuildGeometryNow(); }, delay);
+}
+
+function rebuildGeometryNow() {
+  const oldModels = state.models.slice();
+  // A Generate already in flight owns the model until it finishes. Keep the
+  // pending bit set; its finally block will replay the latest UI state.
+  if ($('generate').disabled) return;
+  if (!oldModels.length || oldModels.some(m => !m.src)) { rebuildPending = false; return; }
+  rebuildPending = false;
+  // Build inputs come from the model's own frozen opts, never re-read from the
+  // DOM: a vex slider nudged without pressing Generate must not sneak in here.
+  // And src comes from the model, not the cache, so moving the map cannot make
+  // this rebuild the wrong area.
+  let models;
+  try {
+    models = oldModels.map(old => {
+      const opts = Object.assign({}, old.opts, {
+        waterLevelM: state.waterLevelM,
+        autoFallback: $('waterAuto').checked,
+        flattenWater: flattenOn(),
+      });
+      const model = buildGeometry(old.src, opts);
+      model.regionId = old.regionId; model.regionIds = old.regionIds;
+      model.regionName = old.regionName; model.exportName = old.exportName;
+      model.frame = buildFrameIfWanted(model);
+      return model;
+    });
+  }
+  catch (e) { console.error(e); setStatus(e.message || String(e), 'err'); return; }
+  state.models = models; state.model = models[0];
+  reconcileAllModels(models);
+  showModels(models, true);
+  updateLegend();
+  refreshBandUI();
+  updateModelStats(models);
+  $('exportFrame').disabled = !state.model.frame;
+}
+
 /* Water level and the keep-4-bands toggle both re-derive the mask, which can
    flip the band count — reconcile before applying. */
 function onWaterSettingChange(echo) {
@@ -1597,14 +2243,22 @@ function onWaterSettingChange(echo) {
   if (isFinite(v)) state.waterLevelM = v;
   else if (echo) el.value = fmtLevel(state.waterLevelM);
   $('waterLevelVal').textContent = fmtLevel(state.waterLevelM);
-  if (!state.model) return;
-  applyWaterLevel(state.model, state.waterLevelM, $('waterAuto').checked);
-  reconcileBands(state.model);
+  if ($('generate').disabled) { scheduleGeometryRebuild(echo ? 0 : 120); return; }
+  if (!state.models.length) return;
+  // flatten off → the geometry does not depend on the level at all, so the
+  // cheap mask-only path is still exactly right
+  if (flattenOn()) { scheduleGeometryRebuild(echo ? 0 : 120); return; }
+  for (const model of state.models) applyWaterLevel(model, state.waterLevelM, $('waterAuto').checked);
+  reconcileAllModels(state.models);
   applyBands();
 }
 $('waterLevel').addEventListener('input', () => onWaterSettingChange(false));
 $('waterLevel').addEventListener('change', () => onWaterSettingChange(true));
 $('waterAuto').addEventListener('change', () => onWaterSettingChange(false));
+$('waterFlatten').addEventListener('change', () => {
+  refreshWaterHint();
+  if (state.model || $('generate').disabled) scheduleGeometryRebuild(0);
+});
 
 /* ============================================================================
    THREE.JS PREVIEW
@@ -1648,10 +2302,24 @@ function resize() {
 }
 function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
 
-function showModel(model, keepCamera) {
-  if (!modelGroup) return; // 3D preview unavailable (no WebGL) — exports still work
+function clearModelGroup() {
+  if (!modelGroup) return;
+  modelGroup.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+  });
   while (modelGroup.children.length) modelGroup.remove(modelGroup.children[0]);
+  modelGroup.position.set(0, 0, 0);
+}
 
+function framePreview(width, depth, keepCamera) {
+  if (!camera || keepCamera) return;
+  const r = Math.max(width, depth, 10);
+  camera.position.set(r * 0.9, -r * 1.0, r * 0.9);
+  controls.target.set(0, 0, 0); controls.update();
+}
+
+function addModelToGroup(model, root) {
   const cx = model.modelWidth / 2, cy = model.modelDepth / 2;
   // A continuous insert only aligns while the puzzle remains assembled.
   const gap = model.routeMode === 'through' && model.routeJoin === 'continuous' ? 1 : 1.10;
@@ -1665,7 +2333,7 @@ function showModel(model, keepCamera) {
     const mesh = new THREE.Mesh(geo, mat);
     // slight explode outward from model center
     mesh.position.set((P.cx - cx) * (gap - 1), (P.cy - cy) * (gap - 1), 0);
-    modelGroup.add(mesh);
+    root.add(mesh);
   }
   // red route inserts, exploded along with the piece each one belongs to
   // (added after all pieces so piece index ↔ child index still lines up)
@@ -1679,7 +2347,7 @@ function showModel(model, keepCamera) {
         const P = model.pieces[R.pid];
         mesh.position.set((P.cx - cx) * (gap - 1), (P.cy - cy) * (gap - 1), 0);
       }
-      modelGroup.add(mesh);
+      root.add(mesh);
     }
   }
 
@@ -1692,22 +2360,102 @@ function showModel(model, keepCamera) {
       geo.setAttribute('normal', new THREE.Float32BufferAttribute(src.nrm, 3));
       const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ color, shininess: 16 }));
       mesh.position.set(F.tx, F.ty, F.tz);
-      modelGroup.add(mesh);
+      root.add(mesh);
     };
     addMesh(F.plate, parseInt($('frameCol').value.slice(1), 16));
     if (F.text) addMesh(F.text, parseInt($('frameTextCol').value.slice(1), 16));
   }
 
-  // center the group at origin
-  modelGroup.position.set(-cx, -cy, 0);
+  root.position.x -= cx; root.position.y -= cy;
+}
 
-  // frame camera
-  if (!keepCamera) {
-    const r = Math.max(model.modelWidth, model.modelDepth);
-    camera.position.set(r * 0.9, -r * 1.0, r * 0.9);
-    controls.target.set(0, 0, 0);
-    controls.update();
+function gridLayout(items, sizes) {
+  const n = items.length, cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols);
+  const maxW = Math.max(...sizes.map(s => s[0]), 1), maxD = Math.max(...sizes.map(s => s[1]), 1);
+  const pitchX = maxW * 1.25, pitchY = maxD * 1.25;
+  items.forEach((item, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    item.position.x += (col - (cols - 1) / 2) * pitchX;
+    item.position.y += ((rows - 1) / 2 - row) * pitchY;
+  });
+  return [Math.max(maxW, cols * pitchX), Math.max(maxD, rows * pitchY)];
+}
+
+function showModels(models, keepCamera) {
+  if (!modelGroup) return;
+  clearModelGroup();
+  const roots = [], sizes = [];
+  for (const model of models || []) {
+    const root = new THREE.Group();
+    addModelToGroup(model, root); modelGroup.add(root);
+    roots.push(root); sizes.push([model.modelWidth, model.modelDepth]);
   }
+  if (!roots.length) return;
+  const span = roots.length > 1 ? gridLayout(roots, sizes) : sizes[0];
+  framePreview(span[0], span[1], keepCamera);
+}
+
+function showModel(model, keepCamera) { showModels(model ? [model] : [], keepCamera); }
+
+function regionProjection(bounds) {
+  const [[latS, lonW], [latN, lonE]] = bounds;
+  const wM = haversine((latN + latS) / 2, lonW, (latN + latS) / 2, lonE);
+  const dM = haversine(latN, (lonW + lonE) / 2, latS, (lonW + lonE) / 2);
+  const scale = parseFloat($('width').value) / Math.max(wM, dM, 1);
+  const width = wM * scale, depth = dM * scale;
+  return {
+    width, depth,
+    point: p => new THREE.Vector2((p[0] - lonW) / (lonE - lonW || 1) * width,
+      (p[1] - latS) / (latN - latS || 1) * depth)
+  };
+}
+
+function addFlatRegion(region, projection, root) {
+  for (const polygon of region.polygons) {
+    const rings = polygon.rings.map(r => {
+      const points = r.map(projection.point);
+      if (points.length > 1 && points[0].equals(points[points.length - 1])) points.pop();
+      return points;
+    }).filter(r => r.length >= 3);
+    if (!rings.length) continue;
+    const shape = new THREE.Shape(rings[0]);
+    for (let i = 1; i < rings.length; i++) shape.holes.push(new THREE.Path(rings[i]));
+    const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshPhongMaterial({
+      color: parseInt(region.color.slice(1), 16), side: THREE.DoubleSide,
+      transparent: true, opacity: 0.62, shininess: 8,
+    }));
+    mesh.position.z = 0.25; root.add(mesh);
+    for (const ring of rings) {
+      const pts = ring.map(p => new THREE.Vector3(p.x, p.y, 0.35));
+      pts.push(pts[0].clone());
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: parseInt(region.color.slice(1), 16) }));
+      root.add(line);
+    }
+  }
+}
+
+function showRegionPreview(keepCamera = false) {
+  if (!modelGroup) return;
+  clearModelGroup();
+  if (!state.selectedRegions.length) return;
+  const roots = [], sizes = [];
+  if (state.regionOutputMode === 'combined') {
+    const bounds = unionRegionBounds(state.selectedRegions), projection = regionProjection(bounds);
+    const root = new THREE.Group();
+    for (const region of state.selectedRegions) addFlatRegion(region, projection, root);
+    root.position.set(-projection.width / 2, -projection.depth / 2, 0);
+    modelGroup.add(root); roots.push(root); sizes.push([projection.width, projection.depth]);
+  } else {
+    for (const region of state.selectedRegions) {
+      const projection = regionProjection(region.bounds), root = new THREE.Group();
+      addFlatRegion(region, projection, root);
+      root.position.set(-projection.width / 2, -projection.depth / 2, 0);
+      modelGroup.add(root); roots.push(root); sizes.push([projection.width, projection.depth]);
+    }
+  }
+  const span = roots.length > 1 ? gridLayout(roots, sizes) : sizes[0];
+  framePreview(span[0], span[1], keepCamera);
 }
 
 /* ============================================================================
@@ -1767,41 +2515,62 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
-async function exportZip() {
-  if (!state.model) return;
-  setStatusKey('stZipping');
-  const zip = new JSZip();
-  for (const P of state.model.pieces) {
-    if (!P.pos.length) continue; // clipped away entirely by the shape
-    const col = P.id % state.model.nx, row = Math.floor(P.id / state.model.nx);
-    zip.file(`piece_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(P));
+function uniqueRegionSlug(name, index, used = new Set()) {
+  let base = String(name || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+  if (!base) base = `region_${String(index + 1).padStart(2, '0')}`;
+  let slug = base, n = 2;
+  while (used.has(slug)) slug = `${base}_${n++}`;
+  used.add(slug); return slug;
+}
+
+function addModelStls(folder, model) {
+  for (const P of model.pieces) {
+    if (!P.pos.length) continue;
+    const col = P.id % model.nx, row = Math.floor(P.id / model.nx);
+    folder.file(`piece_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(P));
   }
-  for (const R of state.model.routeParts || []) {
-    if (R.pid === null) {
-      zip.file('route_red_continuous.stl', pieceToBinarySTL(R));
-    } else {
-      const col = R.pid % state.model.nx, row = Math.floor(R.pid / state.model.nx);
-      zip.file(`route_red_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(R));
+  for (const R of model.routeParts || []) {
+    if (R.pid === null) folder.file('route_red_continuous.stl', pieceToBinarySTL(R));
+    else {
+      const col = R.pid % model.nx, row = Math.floor(R.pid / model.nx);
+      folder.file(`route_red_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(R));
     }
   }
-  if (state.model.frame) zip.file('frame_plate.stl', pieceToBinarySTL(frameMergedMesh(state.model.frame)));
-  // README follows the interface language; the filenames above stay ASCII.
-  const routeNote = !state.model.routeParts ? ''
-    : state.model.routeMode === 'through'
-      ? t('readmeThrough') + (state.model.routeJoin === 'continuous' ? t('readmeContinuous') : '')
+  if (model.frame) folder.file('frame_plate.stl', pieceToBinarySTL(frameMergedMesh(model.frame)));
+  const routeNote = !model.routeParts ? ''
+    : model.routeMode === 'through'
+      ? t('readmeThrough') + (model.routeJoin === 'continuous' ? t('readmeContinuous') : '')
       : t('readmeInlay');
-  zip.file('README.txt', t('readmeHead', {
-    nx: state.model.nx, ny: state.model.ny,
-    w: state.model.modelWidth.toFixed(1), d: state.model.modelDepth.toFixed(1),
+  folder.file('README.txt', t('readmeHead', {
+    nx: model.nx, ny: model.ny, w: model.modelWidth.toFixed(1), d: model.modelDepth.toFixed(1),
   }) + routeNote);
-  const blob = await zip.generateAsync({ type: 'blob' });
-  download(blob, 'topopuzzle_pieces.zip');
-  setStatusKey('stDownloaded', { file: 'topopuzzle_pieces.zip' }, 'ok');
 }
-function exportOne() {
-  if (!state.model) return;
-  download(new Blob([combinedBinarySTL(state.model)], { type: 'model/stl' }), 'topopuzzle_combined.stl');
-  setStatusKey('stDownloaded', { file: 'topopuzzle_combined.stl' }, 'ok');
+
+async function exportZip() {
+  if (!state.models.length) return;
+  setStatusKey('stZipping');
+  const zip = new JSZip();
+  if (isSeparateRegionOutput()) {
+    for (const model of state.models) addModelStls(zip.folder(model.exportName), model);
+  } else addModelStls(zip, state.models[0]);
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const file = isSeparateRegionOutput() ? 'topopuzzle_regions_pieces.zip' : 'topopuzzle_pieces.zip';
+  download(blob, file); setStatusKey('stDownloaded', { file }, 'ok');
+}
+async function exportOne() {
+  if (!state.models.length) return;
+  if (!isSeparateRegionOutput()) {
+    download(new Blob([combinedBinarySTL(state.models[0])], { type: 'model/stl' }), 'topopuzzle_combined.stl');
+    setStatusKey('stDownloaded', { file: 'topopuzzle_combined.stl' }, 'ok'); return;
+  }
+  setStatusKey('stZipping');
+  const zip = new JSZip();
+  for (const model of state.models) zip.folder(model.exportName).file(
+    'topopuzzle_combined.stl', combinedBinarySTL(model));
+  const file = 'topopuzzle_regions_combined.zip';
+  download(await zip.generateAsync({ type: 'blob' }), file);
+  setStatusKey('stDownloaded', { file }, 'ok');
 }
 function frameMergedMesh(F) {
   return F.text
@@ -1874,6 +2643,50 @@ $('exportFrame').addEventListener('click', gateDownload(() => {
    ============================================================================ */
 const WATER_CAP_MM = 0.8; // thickness of the blue water skin in the 3MF
 
+/* A cell-based shoreline step gives adjacent cells different top Z values at
+   the same grid corner. Where that step reaches an outer/piece/band wall, the
+   shorter edge otherwise ends halfway along the neighbour's long vertical
+   edge: a T-junction that many slicers report as non-manifold. Split every
+   vertical triangle edge at the Z levels already present at its XY coordinate.
+   This is linear apart from the tiny per-corner level sorts and changes no
+   surface — it only gives both incident faces identical edge segmentation. */
+function splitVerticalTJunctions(pos) {
+  const EPS = 1e-8;
+  const xyKey = (x, y) => Math.round(x * 1e9) + ',' + Math.round(y * 1e9);
+  const levels = new Map();
+  for (let k = 0; k < pos.length; k += 3) {
+    const key = xyKey(pos[k], pos[k + 1]);
+    let zs = levels.get(key);
+    if (!zs) { zs = []; levels.set(key, zs); }
+    const z = pos[k + 2];
+    if (!zs.some(v => Math.abs(v - z) <= EPS)) zs.push(z);
+  }
+  for (const zs of levels.values()) zs.sort((a, b) => a - b);
+
+  const out = [];
+  const emit = (a, b, c) => out.push(...a, ...b, ...c);
+  for (let k = 0; k < pos.length; k += 9) {
+    const p = [pos.slice(k, k + 3), pos.slice(k + 3, k + 6), pos.slice(k + 6, k + 9)];
+    let edge = -1;
+    for (let e = 0; e < 3; e++) {
+      const a = p[e], b = p[(e + 1) % 3];
+      if (Math.abs(a[0] - b[0]) <= EPS && Math.abs(a[1] - b[1]) <= EPS && Math.abs(a[2] - b[2]) > EPS) {
+        edge = e; break;
+      }
+    }
+    if (edge < 0) { emit(p[0], p[1], p[2]); continue; }
+
+    const a = p[edge], b = p[(edge + 1) % 3], c = p[(edge + 2) % 3];
+    const lo = Math.min(a[2], b[2]), hi = Math.max(a[2], b[2]);
+    let mid = levels.get(xyKey(a[0], a[1])).filter(z => z > lo + EPS && z < hi - EPS);
+    if (!mid.length) { emit(p[0], p[1], p[2]); continue; }
+    if (b[2] < a[2]) mid = mid.reverse();
+    const chain = [a, ...mid.map(z => [a[0], a[1], z]), b];
+    for (let n = 0; n + 1 < chain.length; n++) emit(chain[n], chain[n + 1], c);
+  }
+  return out;
+}
+
 function buildBandSolidMesh(model, pieceId, band) {
   const { Hv, piece, water, cellShape, routeDist, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
   const minE = model.minE;
@@ -1883,14 +2696,22 @@ function buildBandSolidMesh(model, pieceId, band) {
   const MINT = 0.02; // minimum slab thickness (mm) so clipped cells stay manifold
 
   const X = i => i * dx, Y = j => modelDepth - j * dy;
-  // band solids stop below the surface at water vertices; the water cap fills the skin
-  const rawTop = (i, j) => zOf(Hv[j * VW + i]) - (water[j * VW + i] ? WATER_CAP_MM : 0);
-  const topV = (i, j) => Math.max(clamp(rawTop(i, j), cLo, cHi), cLo + MINT);
+  /* Band solids stop below the surface at water, and the cap fills the skin.
+     With flatten on the depression follows the CELL (capCell) rather than the
+     vertex, which is what lets the shore be a vertical step instead of a taper
+     — so rawTop takes the cell (ci, cj) that owns the corner being emitted. */
+  const cap = model.grid.capCell;
+  const wetC = (ci, cj) => !!cap && ci >= 0 && cj >= 0 && ci < W && cj < D && !!cap[cj * W + ci];
+  const drop = (i, j, ci, cj) => cap ? (wetC(ci, cj) ? WATER_CAP_MM : 0)
+                                     : (water[j * VW + i] ? WATER_CAP_MM : 0);
+  const rawTop = (i, j, ci, cj) => zOf(Hv[j * VW + i]) - drop(i, j, ci, cj);
+  const topV = (i, j, ci, cj) => Math.max(clamp(rawTop(i, j, ci, cj), cLo, cHi), cLo + MINT);
   const inc = (i, j) => {
     if (i < 0 || j < 0 || i >= W || j >= D) return false;
     if (piece[j * W + i] !== pieceId || !cellShape[j * W + i]) return false;
     if (band === 0) return true; // band 0 includes the base slab everywhere
-    return Math.max(rawTop(i, j), rawTop(i + 1, j), rawTop(i, j + 1), rawTop(i + 1, j + 1)) > cLo + MINT;
+    return Math.max(rawTop(i, j, i, j), rawTop(i + 1, j, i, j),
+                    rawTop(i, j + 1, i, j), rawTop(i + 1, j + 1, i, j)) > cLo + MINT;
   };
 
   const pos = [];
@@ -1905,7 +2726,11 @@ function buildBandSolidMesh(model, pieceId, band) {
     for (let i = 0; i < W; i++) {
       if (!inc(i, j)) continue;
       const x0 = X(i), x1 = X(i + 1), y0 = Y(j), y1 = Y(j + 1);
-      const t00 = topV(i, j), t10 = topV(i + 1, j), t01 = topV(i, j + 1), t11 = topV(i + 1, j + 1);
+      const t00 = topV(i, j, i, j), t10 = topV(i + 1, j, i, j),
+            t01 = topV(i, j + 1, i, j), t11 = topV(i + 1, j + 1, i, j);
+      // a dry cell beside a wet one now sits WATER_CAP_MM proud of it; the dry
+      // side (the higher one) closes that step so the solid stays watertight
+      const step = (ci, cj) => cap && inc(ci, cj) && !wetC(i, j) && wetC(ci, cj);
       if (cutThrough) {
         const v00 = { x: x0, y: y0, z: t00, d: routeDist[j * VW + i] };
         const v10 = { x: x1, y: y0, z: t10, d: routeDist[j * VW + i + 1] };
@@ -1914,10 +2739,19 @@ function buildBandSolidMesh(model, pieceId, band) {
         const bottom = () => zb;
         addClippedPrismTriangle(mesh, [v00, v11, v10], THROUGH_CHANNEL_HALF, false, bottom);
         addClippedPrismTriangle(mesh, [v00, v01, v11], THROUGH_CHANNEL_HALF, false, bottom);
+        // step walls carry the neighbour's top as their floor; lerpClipVertex
+        // propagates `bottom`, so the clipped channel edge follows the step
+        const stepWall = (a, b, ci, cj, za, zbb) => addClippedBoundaryWall(
+          mesh, Object.assign({}, a, { bottom: za }), Object.assign({}, b, { bottom: zbb }),
+          THROUGH_CHANNEL_HALF, false, v => v.bottom);
         if (!inc(i - 1, j)) addClippedBoundaryWall(mesh, v00, v01, THROUGH_CHANNEL_HALF, false, bottom);
+        else if (step(i - 1, j)) stepWall(v00, v01, i - 1, j, topV(i, j, i - 1, j), topV(i, j + 1, i - 1, j));
         if (!inc(i, j + 1)) addClippedBoundaryWall(mesh, v01, v11, THROUGH_CHANNEL_HALF, false, bottom);
+        else if (step(i, j + 1)) stepWall(v01, v11, i, j + 1, topV(i, j + 1, i, j + 1), topV(i + 1, j + 1, i, j + 1));
         if (!inc(i + 1, j)) addClippedBoundaryWall(mesh, v11, v10, THROUGH_CHANNEL_HALF, false, bottom);
+        else if (step(i + 1, j)) stepWall(v11, v10, i + 1, j, topV(i + 1, j + 1, i + 1, j), topV(i + 1, j, i + 1, j));
         if (!inc(i, j - 1)) addClippedBoundaryWall(mesh, v10, v00, THROUGH_CHANNEL_HALF, false, bottom);
+        else if (step(i, j - 1)) stepWall(v10, v00, i, j - 1, topV(i + 1, j, i, j - 1), topV(i, j, i, j - 1));
       } else {
         // top
         push(x0, y0, t00, x1, y0, t10, x1, y1, t11);
@@ -1929,37 +2763,60 @@ function buildBandSolidMesh(model, pieceId, band) {
         if (!inc(i + 1, j)) {
           push(x1, y0, t10, x1, y0, zb, x1, y1, t11);
           push(x1, y1, t11, x1, y0, zb, x1, y1, zb);
+        } else if (step(i + 1, j)) {
+          const n10 = topV(i + 1, j, i + 1, j), n11 = topV(i + 1, j + 1, i + 1, j);
+          push(x1, y0, t10, x1, y0, n10, x1, y1, t11);
+          push(x1, y1, t11, x1, y0, n10, x1, y1, n11);
         }
         if (!inc(i - 1, j)) {
           push(x0, y0, t00, x0, y1, t01, x0, y0, zb);
           push(x0, y1, t01, x0, y1, zb, x0, y0, zb);
+        } else if (step(i - 1, j)) {
+          const n00 = topV(i, j, i - 1, j), n01 = topV(i, j + 1, i - 1, j);
+          push(x0, y0, t00, x0, y1, t01, x0, y0, n00);
+          push(x0, y1, t01, x0, y1, n01, x0, y0, n00);
         }
         if (!inc(i, j - 1)) {
           push(x0, y0, t00, x0, y0, zb, x1, y0, t10);
           push(x1, y0, t10, x0, y0, zb, x1, y0, zb);
+        } else if (step(i, j - 1)) {
+          const n00 = topV(i, j, i, j - 1), n10 = topV(i + 1, j, i, j - 1);
+          push(x0, y0, t00, x0, y0, n00, x1, y0, t10);
+          push(x1, y0, t10, x0, y0, n00, x1, y0, n10);
         }
         if (!inc(i, j + 1)) {
           push(x0, y1, t01, x1, y1, t11, x0, y1, zb);
           push(x1, y1, t11, x1, y1, zb, x0, y1, zb);
+        } else if (step(i, j + 1)) {
+          const n01 = topV(i, j + 1, i, j + 1), n11 = topV(i + 1, j + 1, i, j + 1);
+          push(x0, y1, t01, x1, y1, t11, x0, y1, n01);
+          push(x1, y1, t11, x1, y1, n11, x0, y1, n01);
         }
       }
     }
   }
-  return pos;
+  return cap ? splitVerticalTJunctions(pos) : pos;
 }
 
-/* Thin blue skin over water cells of one piece: bottom = surface − cap depth
-   (tapering to zero at the shore), top = terrain surface. */
+/* Blue skin over the water cells of one piece; top = terrain surface.
+   Without flatten the depth is per-vertex and tapers to nothing at the shore,
+   which hides the cap edge against sloping painted water. With flatten the
+   depth is uniform over whole water cells, so the pane ends in a full-thickness
+   vertical rim — what a genuinely flat surface needs. */
 function buildWaterCapMesh(model, pieceId) {
   const { Hv, piece, water, cellShape, routeDist, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
   const zOf = e => baseMM + (e - model.minE) * zScale;
   const X = i => i * dx, Y = j => modelDepth - j * dy;
+  const cap = model.grid.capCell;
   const top = (i, j) => zOf(Hv[j * VW + i]);
   const dep = (i, j) => water[j * VW + i] ? WATER_CAP_MM : 0;
-  const bot = (i, j) => top(i, j) - dep(i, j);
-  const inc = (i, j) => i >= 0 && j >= 0 && i < W && j < D && piece[j * W + i] === pieceId &&
-    !!cellShape[j * W + i] &&
-    (dep(i, j) > 0 || dep(i + 1, j) > 0 || dep(i, j + 1) > 0 || dep(i + 1, j + 1) > 0);
+  const bot = (i, j) => cap ? top(i, j) - WATER_CAP_MM : top(i, j) - dep(i, j);
+  const inc = (i, j) => {
+    if (i < 0 || j < 0 || i >= W || j >= D) return false;
+    if (piece[j * W + i] !== pieceId || !cellShape[j * W + i]) return false;
+    if (cap) return !!cap[j * W + i];
+    return dep(i, j) > 0 || dep(i + 1, j) > 0 || dep(i, j + 1) > 0 || dep(i + 1, j + 1) > 0;
+  };
 
   const pos = [];
   const mesh = { pos };
@@ -2359,14 +3216,7 @@ function buildRoute3mf(model, pitchX, pitchY) {
   return pack3mf({ resources: res, items, projectObjects, filamentColors: ['#E5534B'] });
 }
 
-async function exportBambu() {
-  if (!state.model) return;
-  const btn = $('exportBambu'); btn.disabled = true;
-  overlay(true, t('pgBambu', { n: state.model.NB + (state.model.hasWater ? 1 : 0) })); setStatus('');
-  try {
-    await new Promise(r => setTimeout(r, 30)); // let the overlay paint
-    const model = state.model;
-
+async function buildBambuFiles(model) {
     /* Terrain file: the 4 elevation bands, plus water and the frame plate when
        present. The route is deliberately absent — it ships as its own file
        below, which also frees an AMS slot here. */
@@ -2440,18 +3290,39 @@ async function exportBambu() {
       }
     }
 
-    const terrainBlob = await pack3mf({ resources: res, items, projectObjects, filamentColors });
-    const routeBlob = await buildRoute3mf(model, pitchX, pitchY);
+  const terrainBlob = await pack3mf({ resources: res, items, projectObjects, filamentColors });
+  const routeBlob = await buildRoute3mf(model, pitchX, pitchY);
+  return { terrainBlob, routeBlob };
+}
 
-    download(terrainBlob, 'topopuzzle_bambu_4color.3mf');
-    if (routeBlob) {
+async function exportBambu() {
+  if (!state.models.length) return;
+  const btn = $('exportBambu'); btn.disabled = true;
+  overlay(true, t('pgBambu', { n: state.model.NB + (state.model.hasWater ? 1 : 0) })); setStatus('');
+  try {
+    await new Promise(r => setTimeout(r, 30));
+    if (isSeparateRegionOutput()) {
+      const zip = new JSZip();
+      for (let i = 0; i < state.models.length; i++) {
+        const model = state.models[i];
+        overlay(true, t('pgRegion', { done: i + 1, total: state.models.length, place: model.regionName }));
+        const files = await buildBambuFiles(model), folder = zip.folder(model.exportName);
+        folder.file('terrain.3mf', files.terrainBlob);
+        if (files.routeBlob) folder.file('route.3mf', files.routeBlob);
+      }
+      const file = 'topopuzzle_regions_bambu.zip';
+      download(await zip.generateAsync({ type: 'blob' }), file);
+      setStatusKey('stDownloaded', { file }, 'ok');
+    } else {
+      const { terrainBlob, routeBlob } = await buildBambuFiles(state.models[0]);
+      download(terrainBlob, 'topopuzzle_bambu_4color.3mf');
+      if (routeBlob) {
       // browsers gate back-to-back downloads from one gesture; give the first
       // one a moment to be accepted before asking for the second
       await new Promise(r => setTimeout(r, 500));
       download(routeBlob, 'topopuzzle_bambu_route.3mf');
       setStatusKey('stBambuDoneRoute', null, 'ok');
-    } else {
-      setStatusKey('stBambuDone', null, 'ok');
+      } else setStatusKey('stBambuDone', null, 'ok');
     }
   } catch (e) {
     console.error(e);
@@ -2477,68 +3348,102 @@ function overlay(on, text) { $('overlay').style.display = on ? 'grid' : 'none'; 
 
 /* Numbers and units for the Model panel. Split out so a language switch can
    re-render them from state.model without rebuilding any geometry. */
-function updateModelStats(model) {
-  if (!model) return;
-  $('elevStat').textContent = t('fmtRange', { lo: Math.round(model.minE), hi: Math.round(model.maxE) });
-  $('pieceStat').textContent = t('fmtPieceSize', { w: model.pieceW.toFixed(1), h: model.pieceH.toFixed(1) });
-  $('triStat').textContent = model.triCount.toLocaleString(tpLocale());
-  $('loStat').textContent = t('fmtMeters', { n: Math.round(model.minE) });
-  $('hiStat').textContent = t('fmtMeters', { n: Math.round(model.maxE) });
+function updateModelStats(input) {
+  const models = Array.isArray(input) ? input : (input ? [input] : []);
+  if (!models.length) return;
+  const lo = Math.min(...models.map(m => m.minE)), hi = Math.max(...models.map(m => m.maxE));
+  const pieces = models.reduce((n, m) => n + m.pieces.filter(p => p.pos.length).length, 0);
+  const triangles = models.reduce((n, m) => n + m.triCount, 0);
+  $('elevStat').textContent = t('fmtRange', { lo: Math.round(lo), hi: Math.round(hi) });
+  $('pieceStat').textContent = models.length > 1
+    ? t('fmtMultiModels', { regions: models.length, pieces })
+    : t('fmtPieceSize', { w: models[0].pieceW.toFixed(1), h: models[0].pieceH.toFixed(1) });
+  $('triStat').textContent = triangles.toLocaleString(tpLocale());
+  $('loStat').textContent = t('fmtMeters', { n: Math.round(lo) });
+  $('hiStat').textContent = t('fmtMeters', { n: Math.round(hi) });
 }
 
 async function generate() {
   const btn = $('generate'); btn.disabled = true;
   overlay(true, t('pgPreparing')); setStatus('');
   try {
-    const bounds = (() => {
-      const b = boundsFromCenter(state.center.lat, state.center.lon, state.areaKm);
-      return [[b[0][0], b[0][1]], [b[1][0], b[1][1]]]; // [[latS,lonW],[latN,lonE]]
-    })();
-
-    const opts = {
-      bounds,
+    let routePath = currentRoutePts();
+    if (routePath && routePath.length > 400) {
+      const step = Math.ceil(routePath.length / 400);
+      routePath = routePath.filter((_, k) => k % step === 0 || k === routePath.length - 1);
+    }
+    const common = {
       samples: parseInt($('res').value, 10),
       nx: clamp(parseInt($('nx').value, 10) || 1, 1, 8),
       ny: clamp(parseInt($('ny').value, 10) || 1, 1, 8),
       vex: parseFloat($('vex').value),
       waterLevelM: state.waterLevelM,
       autoFallback: $('waterAuto').checked,
+      flattenWater: $('waterFlatten').checked,
       widthMM: parseFloat($('width').value),
       baseMM: parseFloat($('base').value),
       routeMode: $('routeMode').value,
       routeTop: $('routeTop').value,
       routeJoin: $('routeJoin').value,
       frameStyle: currentPrintShape(),
-      routePath: (() => {
-        let path = currentRoutePts();
-        if (path && path.length > 400) { // cap segments so stamping stays fast
-          const step = Math.ceil(path.length / 400);
-          path = path.filter((_, k) => k % step === 0 || k === path.length - 1);
-        }
-        return path;
-      })(),
+      routePath,
     };
 
-    const model = await buildModel(opts, txt => overlay(true, txt));
-    model.frame = buildFrameIfWanted(model);
-    state.model = model;
-    reconcileBands(model);
-    syncBandsToModel(model);
-    recolorModel(model);
-    showModel(model);
+    const selected = state.selectedRegions.slice();
+    const selectionToken = state.regionOutputMode + '|' + selected.map(r => r.id).join('|');
+    let descriptors;
+    if (!selected.length) {
+      descriptors = [{ name: 'TopoPuzzle', exportName: 'topopuzzle', bounds: currentAreaBounds(), polygons: null }];
+    } else if (state.regionOutputMode === 'combined') {
+      descriptors = [{
+        name: selected.map(r => r.name).join(' + '), exportName: 'combined_regions',
+        bounds: unionRegionBounds(selected), polygons: selected.flatMap(r => r.polygons),
+        regionIds: selected.map(r => r.id),
+      }];
+    } else {
+      const used = new Set();
+      descriptors = selected.map((r, i) => ({
+        name: r.name, exportName: uniqueRegionSlug(r.name, i, used),
+        bounds: r.bounds, polygons: r.polygons, regionId: r.id, regionIds: [r.id],
+      }));
+    }
+
+    // The snapshot above supersedes earlier queued edits. Any edit made after
+    // this point sets rebuildPending again and is replayed in finally.
+    clearTimeout(rebuildTimer); rebuildTimer = 0; rebuildPending = false;
+    const models = [];
+    for (let i = 0; i < descriptors.length; i++) {
+      const d = descriptors[i];
+      const opts = Object.assign({}, common, { bounds: d.bounds, regionPolygons: d.polygons });
+      const progress = txt => overlay(true, descriptors.length > 1
+        ? t('pgRegion', { done: i + 1, total: descriptors.length, place: d.name }) + ' · ' + txt : txt);
+      const model = await buildModel(opts, progress);
+      model.regionId = d.regionId; model.regionIds = d.regionIds;
+      model.regionName = d.name; model.exportName = d.exportName;
+      model.frame = buildFrameIfWanted(model);
+      models.push(model);
+    }
+    const currentToken = state.regionOutputMode + '|' + state.selectedRegions.map(r => r.id).join('|');
+    if (currentToken !== selectionToken) throw new Error(t('errRegionChanged'));
+    state.models = models; state.model = models[0] || null;
+    reconcileAllModels(models);
+    showModels(models);
     updateLegend();
     refreshBandUI();
 
-    updateModelStats(model);
-    $('exportZip').disabled = false; $('exportOne').disabled = false; $('exportBambu').disabled = false;
-    $('exportFrame').disabled = !model.frame;
-    setStatusKey('stDone', { zoom: model.zoom, n: model.nx * model.ny }, 'ok');
+    updateModelStats(models);
+    setExportEnabled(!!models.length);
+    const pieceCount = models.reduce((n, m) => n + m.pieces.filter(p => p.pos.length).length, 0);
+    if (selected.length > 1) setStatusKey('stDoneMulti', { regions: selected.length, n: pieceCount }, 'ok');
+    else setStatusKey('stDone', { zoom: models[0].zoom, n: pieceCount }, 'ok');
     // A route that lies outside the puzzle area is stamped nowhere and the print
     // comes out bare. Say so rather than reporting a clean success.
-    if (opts.routePath && opts.routePath.length > 1 && opts.routeMode !== 'off') {
-      const [[latS, lonW], [latN, lonE]] = bounds;
-      const anyInside = opts.routePath.some(([la, lo]) =>
-        la >= latS && la <= latN && lo >= lonW && lo <= lonE);
+    if (routePath && routePath.length > 1 && common.routeMode !== 'off') {
+      const anyInside = descriptors.some(d => routePath.some(([la, lo]) => {
+        if (d.polygons) return pointInRegion(lo, la, d.polygons);
+        const [[latS, lonW], [latN, lonE]] = d.bounds;
+        return la >= latS && la <= latN && lo >= lonW && lo <= lonE;
+      }));
       if (!anyInside) setStatusKey('stRouteOutside', null, 'err');
     }
   } catch (e) {
@@ -2546,6 +3451,7 @@ async function generate() {
     setStatus(e.message || t('errGenerate'), 'err');
   } finally {
     overlay(false); btn.disabled = false;
+    if (rebuildPending) scheduleGeometryRebuild(0);
   }
 }
 $('generate').addEventListener('click', generate);
@@ -2578,6 +3484,7 @@ function refreshFrame() {
   if (state.model && !$('generate').disabled) generate();
 }));
 function setFrameTab(on) {
+  if (on && state.selectedRegions.length) clearRegions(true);
   if (frameOn === on) return;
   frameOn = on;
   $('frameTabOn').classList.toggle('active', on);
@@ -2756,8 +3663,12 @@ function setLang(code, persist) {
 
   // text that applyI18n cannot own, because it depends on runtime state
   refreshRouteBtn();
-  updateModelStats(state.model);
+  refreshRegionButton();
+  refreshRegionList();
+  refreshExportLabels();
+  updateModelStats(state.models);
   refreshBandUI();
+  refreshWaterHint();
   if (lastStatus) renderStatus(t(lastStatus.key, lastStatus.params), lastStatus.cls);
   refreshLayerControl();
 
