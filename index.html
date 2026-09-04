@@ -111,13 +111,52 @@
 
     <div class="group">
       <h2 data-i18n="g4Title">4 · Colors (Bambu AMS)</h2>
-      <div class="color-grid">
-        <label><input id="col0" type="color" value="#2c5c8f" /><span><b data-i18n="band1">Band 1 · low</b><span class="band-range" id="bandR0">—</span></span></label>
-        <label><input id="col1" type="color" value="#3f9e6f" /><span><b data-i18n="band2">Band 2</b><span class="band-range" id="bandR1">—</span></span></label>
-        <label><input id="col2" type="color" value="#e3d27a" /><span><b data-i18n="band3">Band 3</b><span class="band-range" id="bandR2">—</span></span></label>
-        <label><input id="col3" type="color" value="#f4f4f4" /><span><b data-i18n="band4">Band 4 · peak</b><span class="band-range" id="bandR3">—</span></span></label>
+      <label class="row" for="waterLevel"><span data-i18n="lblWaterLevel">Water level</span> <span class="val"><span id="waterLevelVal">0.3</span> <span data-i18n="unitM">m</span></span></label>
+      <input id="waterLevel" type="number" min="-500" max="9000" step="0.1" value="0.3" />
+      <div class="hint" data-i18n="hintWater">Everything at or below this height prints in the water colour, together with the lakes and rivers OpenStreetMap knows about. The surface keeps its relief — it is painted, not flattened.</div>
+
+      <div class="band-list" id="bandList" style="margin-top:8px">
+        <div class="band-row" id="waterRow" hidden>
+          <input id="colWater" type="color" value="#3b7bd4" />
+          <label class="band-name" id="bandNameW" for="colWater">Water</label>
+          <span class="band-range" id="bandRW">—</span>
+        </div>
+        <div class="band-row" id="bandRow0">
+          <input id="col0" type="color" value="#2c5c8f" />
+          <label class="band-name" id="bandName0" for="col0">Band 1</label>
+          <span class="band-range">
+            <span class="band-static" id="bandLo0">—</span><span class="band-dash" id="bandDash0">–</span><input class="band-cut" id="cut0" data-row="0" type="number" /><span class="band-static" id="bandHi0" hidden>—</span> <span data-i18n="unitM">m</span>
+          </span>
+        </div>
+        <div class="band-row" id="bandRow1">
+          <input id="col1" type="color" value="#3f9e6f" />
+          <label class="band-name" id="bandName1" for="col1">Band 2</label>
+          <span class="band-range">
+            <span class="band-static" id="bandLo1">—</span><span class="band-dash" id="bandDash1">–</span><input class="band-cut" id="cut1" data-row="1" type="number" /><span class="band-static" id="bandHi1" hidden>—</span> <span data-i18n="unitM">m</span>
+          </span>
+        </div>
+        <div class="band-row" id="bandRow2">
+          <input id="col2" type="color" value="#e3d27a" />
+          <label class="band-name" id="bandName2" for="col2">Band 3</label>
+          <span class="band-range">
+            <span class="band-static" id="bandLo2">—</span><span class="band-dash" id="bandDash2">–</span><input class="band-cut" id="cut2" data-row="2" type="number" /><span class="band-static" id="bandHi2" hidden>—</span> <span data-i18n="unitM">m</span>
+          </span>
+        </div>
+        <div class="band-row" id="bandRow3">
+          <input id="col3" type="color" value="#f4f4f4" />
+          <label class="band-name" id="bandName3" for="col3">Band 4</label>
+          <span class="band-range">
+            <span class="band-static" id="bandLo3">—</span><span class="band-dash" id="bandDash3">–</span><input class="band-cut" id="cut3" data-row="3" type="number" /><span class="band-static" id="bandHi3" hidden>—</span> <span data-i18n="unitM">m</span>
+          </span>
+        </div>
       </div>
-      <div class="hint" data-i18n="hintBands">Terrain is split into 4 elevation bands. Each band exports as its own solid with a material assigned, so Bambu Studio maps them to 4 AMS filament slots.</div>
+
+      <div class="band-actions">
+        <button id="bandReset" data-i18n="btnBandReset">Reset to even</button>
+        <label class="band-check"><input id="waterAuto" type="checkbox" checked /><span data-i18n="lblWaterAuto">4 bands when there is no water</span></label>
+      </div>
+      <div class="hint band-note" id="bandNote"></div>
+      <div class="hint" id="hintBands"></div>
     </div>
 
     <div class="group">
@@ -241,6 +280,20 @@ const state = {
   center: { lat: 35.3606, lon: 138.7274 }, // Mt Fuji
   areaKm: 24,
   model: null, // built geometry package
+  waterLevelM: 0.3, // mirrors #waterLevel; everything at or below prints as water
+  /* Authoritative elevation-band boundaries, in METRES. The model's zCuts are a
+     derived cache. These boot values make updateLegend() emit the same four even
+     stripes the old fixed-quarter legend did, before any model exists. */
+  bands: {
+    nb: 4,                       // active altitude bands: 3 with water, else 4
+    cutsM: [0.25, 0.5, 0.75],    // interior boundaries, ascending, length nb-1
+    landMin: 0, landMax: 1,      // metre range the boundaries live in
+    edited: false,               // user typed a boundary (drives the sticky policy)
+    reset: false,                // last reconcile discarded them (drives the note)
+    ready: false,                // a model exists; before that the rows show placeholders
+    waterActive: false,          // blue slot in use
+    hasOsmWater: false,          // OSM found lakes/rivers, so blue is not just the level
+  },
 };
 
 /* ============================================================================
@@ -1028,16 +1081,16 @@ async function buildModel(opts, onProgress) {
   if (!isFinite(minE)) { minE = 0; maxE = 1; }
   if (maxE - minE < 1) maxE = minE + 1;
 
-  // --- water detection: OSM lake/river polygons + sea level ---
+  // --- water detection: OSM lake/river polygons, kept raw ---
+  // The water level threshold is applied later (applyWaterLevel), after the route
+  // emboss may have moved heights, so that raising the level costs one array pass
+  // instead of another Overpass round-trip.
+  const osmWater = new Uint8Array(VW * VD);
   const water = new Uint8Array(VW * VD);
-  let hasWater = false;
   try {
     onProgress(t('pgWater'));
-    hasWater = await fetchWaterMask(bounds, W, D, VW, VD, water);
+    await fetchWaterMask(bounds, W, D, VW, VD, osmWater);
   } catch (e) { console.warn('Water lookup failed, continuing without it:', e); }
-  for (let v = 0; v < water.length; v++) {
-    if (!water[v] && Hv[v] <= 0.3) { water[v] = 1; hasWater = true; } // sea
-  }
 
   onProgress(t('pgPieces'));
   const piece = buildPartition(W, D, nx, ny);
@@ -1277,43 +1330,148 @@ async function buildModel(opts, onProgress) {
     P.cx = n ? sx / n : modelWidth / 2; P.cy = n ? sy / n : modelDepth / 2;
   }
 
-  // 4 equal elevation bands → z-heights of the 3 interior cuts (model mm)
   const zScale = mmPerMeter * vex;
-  const eStep = (maxE - minE) / 4;
-  const zCuts = [1, 2, 3].map(k => baseMM + k * eStep * zScale);
   const maxZ = baseMM + (maxE - minE) * zScale;
 
-  return {
-    pieces, routeParts, hasWater, nx, ny, W, D, minE, maxE, triCount,
+  const model = {
+    pieces, routeParts, nx, ny, W, D, minE, maxE, triCount,
     routeMode: opts.routeMode, routeTop: opts.routeTop || 'flush', routeJoin: opts.routeJoin || 'piece',
     modelWidth, modelDepth,
     pieceW: modelWidth / nx, pieceH: modelDepth / ny,
     zoom: elevSrc.zoom,
-    zCuts, maxZ, eStep,
-    grid: { Hv, piece, water, cellShape, routeDist, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
+    maxZ,
+    // filled in by applyWaterLevel + syncBandsToModel below
+    hasWater: false, NB: 4, landMin: minE, waterLevelM: 0, bandCutsM: [], zCuts: [],
+    grid: { Hv, piece, water, osmWater, cellShape, routeDist, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
   };
+  // Flood to the requested level now that the emboss (if any) has settled the heights.
+  applyWaterLevel(model, opts.waterLevelM, opts.autoFallback);
+  return model;
 }
 
 /* ============================================================================
-   4-COLOR ELEVATION BANDS (Bambu AMS)
+   ELEVATION BANDS + WATER (Bambu AMS)
+
+   Water is its own filament slot pinned to the water mask, so blue always means
+   water. The remaining slots are altitude bands whose boundaries the user can
+   type. With water present that is 3 bands (4 filaments total); with none, the
+   blue slot is released and it falls back to 4 even bands, exactly as before.
+
+   state.bands is the source of truth for the boundaries, in METRES. The model's
+   zCuts (model mm), NB, bandCutsM and landMin are a derived cache refreshed by
+   syncBandsToModel — neither the preview nor the piece geometry reads them at
+   build time, so editing a boundary is a pure recolor.
    ============================================================================ */
+const BAND_IDS = ['col0', 'col1', 'col2', 'col3'];
+const WATER_HEX = '#3b7bd4';   // #colWater default, and the fallback before boot
+const MIN_BAND_MM = 0.3;       // ~1.5 layers: thinner than this will not print
+
 function hexToRgb(h) {
   const n = parseInt(h.slice(1), 16);
   return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
 }
-function currentBandColors() { return [0, 1, 2, 3].map(k => hexToRgb($('col' + k).value)); }
+/* At NB=3 water replaces the deepest colour, so the land keeps green/sand/snow
+   rather than leaving a dark blue band sitting next to the water blue. */
+function activeBandIds() { return BAND_IDS.slice(4 - state.bands.nb); }
+function currentBandColors() { return activeBandIds().map(id => hexToRgb($(id).value)); }
+function waterColor() { const el = $('colWater'); return el ? el.value : WATER_HEX; }
 
 function bandOfZ(z, zCuts) {
-  for (let k = 0; k < 3; k++) if (z < zCuts[k] - 1e-6) return k;
-  return 3;
+  for (let k = 0; k < zCuts.length; k++) if (z < zCuts[k] - 1e-6) return k;
+  return zCuts.length;
+}
+
+const evenCutsM = (lo, hi, nb) =>
+  Array.from({ length: nb - 1 }, (_, k) => lo + (k + 1) * (hi - lo) / nb);
+
+/* Smallest allowed gap between boundaries: never below one printable layer, and
+   never more than an eighth of the span, so clamping can't invert the range. */
+function minGapM(lo, hi) {
+  const span = Math.max(hi - lo, 1e-6);
+  const mm = state.model ? MIN_BAND_MM / state.model.grid.zScale : 0;
+  return Math.min(Math.max(span / 1000, mm), span / 8);
+}
+
+/* Clamp cut k against its neighbours. Deliberately clamps rather than reorders:
+   a boundary that jumps past its neighbour would silently reassign colours to
+   different elevations. */
+function clampCut(k, v) {
+  const b = state.bands, g = minGapM(b.landMin, b.landMax);
+  const lo = (k === 0 ? b.landMin : b.cutsM[k - 1]) + g;
+  const hi = (k === b.cutsM.length - 1 ? b.landMax : b.cutsM[k + 1]) - g;
+  return clamp(v, lo, Math.max(lo, hi));
+}
+
+const cutDecimals = () => (state.bands.landMax - state.bands.landMin) >= 20 ? 0 : 1;
+const fmtCut = v => (+v).toFixed(cutDecimals());
+/* Water level is a single number, not a band edge: keep one decimal but drop a
+   trailing .0, so 0.3 stays 0.3 even when the bands round to whole metres. */
+const fmtLevel = v => (+v).toFixed(1).replace(/\.0$/, '');
+
+/* Lowest vertex that is NOT water — an OSM lake at 400 m must not push the split
+   above a 350 m valley floor. With no water at all this is exactly minE, which is
+   what keeps the no-water output identical to the old even quarter split. */
+function landMinOf(Hv, water, minE, maxE, level) {
+  let lm = Infinity;
+  for (let v = 0; v < Hv.length; v++) if (!water[v] && Hv[v] < lm) lm = Hv[v];
+  if (!isFinite(lm)) lm = Math.max(minE, level);      // every vertex is water
+  lm = clamp(lm, minE, maxE);
+  if (maxE - lm < 1) lm = Math.max(minE, maxE - 1);   // keep at least 1 m of span
+  return lm;
+}
+
+/* Rebuild the water mask for a new level. Costs one pass over the grid — no
+   Overpass call, no tile fetch, no geometry rebuild. */
+function applyWaterLevel(model, level, autoFallback) {
+  const g = model.grid;
+  const lv = isFinite(level) ? level : 0.3;
+  let any = false;
+  for (let v = 0; v < g.water.length; v++) {
+    const w = (g.osmWater[v] || g.Hv[v] <= lv) ? 1 : 0;
+    g.water[v] = w; if (w) any = true;
+  }
+  model.waterLevelM = lv;
+  model.hasWater = any;
+  model.hasOsmWater = g.osmWater.some(v => v === 1);
+  model.landMin = landMinOf(g.Hv, g.water, model.minE, model.maxE, lv);
+  // no water → release the blue slot and go back to 4 land bands, unless the
+  // user has turned that fallback off
+  model.NB = (any || autoFallback === false) ? 3 : 4;
+  return model;
+}
+
+/* Keep the user's boundaries across a regenerate if they still fit the new
+   elevation range; otherwise reset to even and say so. Re-rendering the same
+   place at a different exaggeration or piece count leaves minE/maxE alone, so
+   tuned boundaries survive the common case; moving continents resets them. */
+function reconcileBands(model) {
+  const b = state.bands;
+  const lo = model.landMin, hi = model.maxE, nb = model.NB;
+  const gap = minGapM(lo, hi);
+  const fits = b.edited && b.cutsM.length === nb - 1 &&
+    b.cutsM.every((v, i) => v >= lo + gap * (i + 1) && v <= hi - gap * (nb - 1 - i)) &&
+    b.cutsM.every((v, i) => i === 0 || v > b.cutsM[i - 1]);
+  b.reset = b.edited && !fits;
+  b.nb = nb; b.landMin = lo; b.landMax = hi;
+  b.waterActive = model.hasWater; b.hasOsmWater = model.hasOsmWater; b.ready = true;
+  if (!fits) { b.cutsM = evenCutsM(lo, hi, nb); b.edited = false; }
+}
+
+/* state.bands (metres) → the model's derived cache (model mm). */
+function syncBandsToModel(model) {
+  if (!model) return;
+  const b = state.bands, g = model.grid;
+  model.NB = b.nb;
+  model.landMin = b.landMin;
+  model.bandCutsM = b.cutsM.slice();
+  model.zCuts = b.cutsM.map(e => g.baseMM + (e - model.minE) * g.zScale);
 }
 
 /* Fill each piece's vertex-color array from vertex height → band color.
-   Water surfaces (flat lake/sea areas) override the band with blue. */
-const WATER_HEX = '#3b7bd4';
+   Water surfaces (lake/sea areas) override the band with the water color. */
 function recolorModel(model) {
   const cols = currentBandColors();
-  const wcol = hexToRgb(WATER_HEX);
+  const wcol = hexToRgb(waterColor());
   const g = model.grid;
   for (const P of model.pieces) {
     if (!P.col || P.col.length !== P.pos.length) P.col = new Float32Array(P.pos.length);
@@ -1333,17 +1491,63 @@ function recolorModel(model) {
   }
 }
 
+/* Segments are proportional to each band's metre span — with editable boundaries
+   fixed quarters would misreport. Water gets a fixed slice instead of a
+   proportional one, or a 0.3 m level against 3000 m of relief would vanish. */
+const LEGEND_WATER_PCT = 14;
 function updateLegend() {
-  const cs = [0, 1, 2, 3].map(k => $('col' + k).value);
-  $('legend').style.background =
-    `linear-gradient(90deg, ${cs[0]} 0 25%, ${cs[1]} 25% 50%, ${cs[2]} 50% 75%, ${cs[3]} 75% 100%)`;
+  const b = state.bands, cols = activeBandIds().map(id => $(id).value);
+  const stops = []; let at = 0;
+  if (b.waterActive) { stops.push(waterColor() + ' 0 ' + LEGEND_WATER_PCT + '%'); at = LEGEND_WATER_PCT; }
+  const span = Math.max(b.landMax - b.landMin, 1e-6), room = 100 - at;
+  const edges = [b.landMin].concat(b.cutsM, b.landMax);
+  for (let k = 0; k < b.nb; k++) {
+    // pin the final edge to 100% so rounding can't leave a sliver of background
+    const end = k === b.nb - 1 ? 100 : at + (edges[k + 1] - edges[k]) / span * room;
+    stops.push(cols[k] + ' ' + at.toFixed(3) + '% ' + end.toFixed(3) + '%');
+    at = end;
+  }
+  $('legend').style.background = 'linear-gradient(90deg, ' + stops.join(', ') + ')';
 }
 
-function updateBandRanges(model) {
-  for (let k = 0; k < 4; k++) {
-    const lo = model.minE + k * model.eStep, hi = model.minE + (k + 1) * model.eStep;
-    $('bandR' + k).textContent = t('fmtRange', { lo: Math.round(lo), hi: Math.round(hi) });
+/* Names, ranges and the cut inputs. Safe to call with no model — the rows then
+   show placeholders. Skips the focused field so typing is never interrupted. */
+function refreshBandRanges() {
+  const b = state.bands, off = 4 - b.nb, dp = cutDecimals();
+  $('waterRow').hidden = !b.waterActive;
+  if (b.waterActive) {
+    $('bandNameW').textContent = t('bandWater');
+    $('bandRW').textContent = !b.ready ? '—'
+      : t(b.hasOsmWater ? 'fmtWaterLakes' : 'fmtWaterUpTo', { hi: fmtLevel(state.waterLevelM) });
   }
+  for (let r = 0; r < 4; r++) {
+    const row = $('bandRow' + r), k = r - off;
+    row.hidden = k < 0;
+    if (k < 0) continue;
+    $('bandName' + r).textContent =
+      t(k === 0 ? 'bandLowest' : k === b.nb - 1 ? 'bandPeak' : 'bandMid', { n: k + 1 });
+    const lo = k === 0 ? b.landMin : b.cutsM[k - 1];
+    $('bandLo' + r).textContent = b.ready ? fmtCut(lo) : '—';
+    const isTop = k === b.nb - 1;
+    const cut = $('cut' + r), dash = $('bandDash' + r), hi = $('bandHi' + r);
+    dash.hidden = !b.ready;
+    cut.hidden = isTop || !b.ready;
+    hi.hidden = !isTop || !b.ready;
+    if (isTop) { hi.textContent = b.ready ? fmtCut(b.landMax) : ''; continue; }
+    if (!b.ready) continue;
+    cut.min = fmtCut(b.landMin); cut.max = fmtCut(b.landMax); cut.step = dp === 0 ? 1 : 0.1;
+    if (document.activeElement !== cut) cut.value = fmtCut(b.cutsM[k]);
+  }
+  $('bandNote').textContent = b.reset ? t('noteBandsReset') : '';
+  $('hintBands').textContent = t('hintBands', { n: b.nb, total: b.nb + (b.waterActive ? 1 : 0) });
+}
+const refreshBandUI = refreshBandRanges;
+
+/* The live path: derived cache → recolor → panel text. No geometry rebuild. */
+function applyBands() {
+  syncBandsToModel(state.model);
+  onColorChange();
+  refreshBandRanges();
 }
 
 /* Live recolor when a picker changes. */
@@ -1359,7 +1563,48 @@ function onColorChange() {
     attr.needsUpdate = true;
   });
 }
-['col0', 'col1', 'col2', 'col3'].forEach(id => $(id).addEventListener('input', onColorChange));
+BAND_IDS.concat('colWater').forEach(id => $(id).addEventListener('input', onColorChange));
+
+/* Boundary edits: ignore half-typed values on `input`, and echo the clamped
+   number back on `change` so a correction is visible. */
+for (let r = 0; r < 4; r++) {
+  const el = $('cut' + r);
+  const commit = (echo) => {
+    const b = state.bands, k = r - (4 - b.nb);
+    if (!b.ready || k < 0 || k >= b.cutsM.length) return;
+    const v = parseFloat(el.value);
+    if (!isFinite(v)) { if (echo) el.value = fmtCut(b.cutsM[k]); return; }
+    b.cutsM[k] = clampCut(k, v);
+    b.edited = true; b.reset = false;
+    if (echo) el.value = fmtCut(b.cutsM[k]);
+    applyBands();
+  };
+  el.addEventListener('input', () => commit(false));
+  el.addEventListener('change', () => commit(true));
+}
+
+$('bandReset').addEventListener('click', () => {
+  const b = state.bands;
+  b.cutsM = evenCutsM(b.landMin, b.landMax, b.nb);
+  b.edited = false; b.reset = false;
+  applyBands();
+});
+
+/* Water level and the keep-4-bands toggle both re-derive the mask, which can
+   flip the band count — reconcile before applying. */
+function onWaterSettingChange(echo) {
+  const el = $('waterLevel'), v = parseFloat(el.value);
+  if (isFinite(v)) state.waterLevelM = v;
+  else if (echo) el.value = fmtLevel(state.waterLevelM);
+  $('waterLevelVal').textContent = fmtLevel(state.waterLevelM);
+  if (!state.model) return;
+  applyWaterLevel(state.model, state.waterLevelM, $('waterAuto').checked);
+  reconcileBands(state.model);
+  applyBands();
+}
+$('waterLevel').addEventListener('input', () => onWaterSettingChange(false));
+$('waterLevel').addEventListener('change', () => onWaterSettingChange(true));
+$('waterAuto').addEventListener('change', () => onWaterSettingChange(false));
 
 /* ============================================================================
    THREE.JS PREVIEW
@@ -1634,7 +1879,7 @@ function buildBandSolidMesh(model, pieceId, band) {
   const minE = model.minE;
   const zOf = e => baseMM + (e - minE) * zScale;
   const cLo = band === 0 ? 0 : model.zCuts[band - 1];
-  const cHi = band === 3 ? model.maxZ + 0.001 : model.zCuts[band];
+  const cHi = band >= model.zCuts.length ? model.maxZ + 0.001 : model.zCuts[band];
   const MINT = 0.02; // minimum slab thickness (mm) so clipped cells stay manifold
 
   const X = i => i * dx, Y = j => modelDepth - j * dy;
@@ -2117,7 +2362,7 @@ function buildRoute3mf(model, pitchX, pitchY) {
 async function exportBambu() {
   if (!state.model) return;
   const btn = $('exportBambu'); btn.disabled = true;
-  overlay(true, t('pgBambu')); setStatus('');
+  overlay(true, t('pgBambu', { n: state.model.NB + (state.model.hasWater ? 1 : 0) })); setStatus('');
   try {
     await new Promise(r => setTimeout(r, 30)); // let the overlay paint
     const model = state.model;
@@ -2125,30 +2370,22 @@ async function exportBambu() {
     /* Terrain file: the 4 elevation bands, plus water and the frame plate when
        present. The route is deliberately absent — it ships as its own file
        below, which also frees an AMS slot here. */
-    const bandNames = ['low', 'mid-low', 'mid-high', 'peak'];
     const res = ['<basematerials id="1">'];
     const filamentColors = [];
-    for (let k = 0; k < 4; k++) {
-      const color = $('col' + k).value.toUpperCase();
+    const addMat = (name, color) => {
       filamentColors.push(color);
-      res.push(`<base name="band${k + 1}_${bandNames[k]}" displaycolor="${color}FF"/>`);
-    }
-    let nextP = 4, waterPindex = -1, platePindex = -1, textPindex = -1;
-    if (model.hasWater) {
-      const color = WATER_HEX.toUpperCase();
-      res.push(`<base name="water_blue" displaycolor="${color}FF"/>`);
-      filamentColors.push(color); waterPindex = nextP++;
-    }
-    if (model.frame) {
-      const plateColor = $('frameCol').value.toUpperCase();
-      res.push(`<base name="plate" displaycolor="${plateColor}FF"/>`);
-      filamentColors.push(plateColor); platePindex = nextP++;
-      if (model.frame.text) {
-        const textColor = $('frameTextCol').value.toUpperCase();
-        res.push(`<base name="plate_text" displaycolor="${textColor}FF"/>`);
-        filamentColors.push(textColor); textPindex = nextP++;
-      }
-    }
+      res.push(`<base name="${name}" displaycolor="${color}FF"/>`);
+      return filamentColors.length - 1;
+    };
+    const NB = model.NB;
+    const bandNames = NB === 4 ? ['low', 'mid-low', 'mid-high', 'peak'] : ['low', 'mid', 'peak'];
+    // water first: with it, this is 3 bands + water = one full AMS set
+    const waterPindex = model.hasWater ? addMat('water_blue', waterColor().toUpperCase()) : -1;
+    const bandPindex = activeBandIds().map((id, k) =>
+      addMat(`band${k + 1}_${bandNames[k]}`, $(id).value.toUpperCase()));
+    const platePindex = model.frame ? addMat('plate', $('frameCol').value.toUpperCase()) : -1;
+    const textPindex = (model.frame && model.frame.text)
+      ? addMat('plate_text', $('frameTextCol').value.toUpperCase()) : -1;
     res.push('</basematerials>');
 
     let nextId = 2;
@@ -2156,16 +2393,16 @@ async function exportBambu() {
     for (const P of model.pieces) {
       const row = Math.floor(P.id / model.nx) + 1, col = P.id % model.nx + 1;
       const comp = [], parts = [];
-      for (let b = 0; b < 4; b++) {
-        const name = `r${row}c${col}_band${b + 1}`;
-        const xml = meshObjectXML(nextId, buildBandSolidMesh(model, P.id, b), b, name);
-        if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: b + 1 }); nextId++; }
-      }
-      // this piece's blue water skin
+      // this piece's water skin, listed first to match the sidebar order
       if (model.hasWater) {
         const name = `r${row}c${col}_water`;
         const xml = meshObjectXML(nextId, buildWaterCapMesh(model, P.id), waterPindex, name);
         if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: waterPindex + 1 }); nextId++; }
+      }
+      for (let b = 0; b < NB; b++) {
+        const name = `r${row}c${col}_band${b + 1}`;
+        const xml = meshObjectXML(nextId, buildBandSolidMesh(model, P.id, b), bandPindex[b], name);
+        if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: bandPindex[b] + 1 }); nextId++; }
       }
       if (comp.length) pieceObjs.push({ id: nextId++, comp, parts, P, row, col }); // skip clipped-away pieces
     }
@@ -2264,6 +2501,8 @@ async function generate() {
       nx: clamp(parseInt($('nx').value, 10) || 1, 1, 8),
       ny: clamp(parseInt($('ny').value, 10) || 1, 1, 8),
       vex: parseFloat($('vex').value),
+      waterLevelM: state.waterLevelM,
+      autoFallback: $('waterAuto').checked,
       widthMM: parseFloat($('width').value),
       baseMM: parseFloat($('base').value),
       routeMode: $('routeMode').value,
@@ -2283,9 +2522,12 @@ async function generate() {
     const model = await buildModel(opts, txt => overlay(true, txt));
     model.frame = buildFrameIfWanted(model);
     state.model = model;
+    reconcileBands(model);
+    syncBandsToModel(model);
     recolorModel(model);
     showModel(model);
-    updateBandRanges(model);
+    updateLegend();
+    refreshBandUI();
 
     updateModelStats(model);
     $('exportZip').disabled = false; $('exportOne').disabled = false; $('exportBambu').disabled = false;
@@ -2515,7 +2757,7 @@ function setLang(code, persist) {
   // text that applyI18n cannot own, because it depends on runtime state
   refreshRouteBtn();
   updateModelStats(state.model);
-  if (state.model) updateBandRanges(state.model);
+  refreshBandUI();
   if (lastStatus) renderStatus(t(lastStatus.key, lastStatus.params), lastStatus.cls);
   refreshLayerControl();
 

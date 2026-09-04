@@ -70,11 +70,19 @@
 
     /* ---- 4 · Colors ---- */
     g4Title: '4 · Colors (Bambu AMS)',
-    band1: 'Band 1 · low',
-    band2: 'Band 2',
-    band3: 'Band 3',
-    band4: 'Band 4 · peak',
-    hintBands: 'Terrain is split into 4 elevation bands. Each band exports as its own solid with a material assigned, so Bambu Studio maps them to 4 AMS filament slots.',
+    lblWaterLevel: 'Water level',
+    hintWater: 'Everything at or below this height prints in the water colour, together with the lakes and rivers OpenStreetMap knows about. The surface keeps its relief — it is painted, not flattened.',
+    bandWater: 'Water',
+    fmtWaterUpTo: '≤ {hi} m',
+    fmtWaterLakes: 'lakes · ≤ {hi} m',
+    bandLowest: 'Band {n} · low',
+    bandMid: 'Band {n}',
+    bandPeak: 'Band {n} · peak',
+    unitM: 'm',
+    btnBandReset: 'Reset to even',
+    lblWaterAuto: '4 bands when there is no water',
+    noteBandsReset: 'The elevation range changed, so the band boundaries were reset to an even split.',
+    hintBands: 'Terrain is split into {n} elevation bands — type a boundary to move it. Each band exports as its own solid with a material assigned, so Bambu Studio maps this print to {total} AMS filament slots.',
 
     /* ---- 5 · Frame plate ---- */
     g5Title: '5 · Frame plate',
@@ -159,7 +167,7 @@
     pgPieces: 'Cutting puzzle pieces…',
     pgRoute: 'Stamping route…',
     pgRouteThrough: 'Cutting full-depth route…',
-    pgBambu: 'Building 4-color 3MF…',
+    pgBambu: 'Building {n}-color 3MF…',
 
     /* ---- errors ---- */
     errSearchFailed: 'Search failed',
@@ -252,11 +260,19 @@
     lblBase: 'ความหนาฐาน',
 
     g4Title: '4 · สี (Bambu AMS)',
-    band1: 'แถบ 1 · ต่ำสุด',
-    band2: 'แถบ 2',
-    band3: 'แถบ 3',
-    band4: 'แถบ 4 · ยอด',
-    hintBands: 'ภูมิประเทศถูกแบ่งเป็นแถบระดับความสูง 4 แถบ แต่ละแถบส่งออกเป็นชิ้นทึบของตัวเองพร้อมกำหนดวัสดุ Bambu Studio จึงจับคู่กับช่องฟิลาเมนต์ AMS ทั้ง 4 ช่องได้',
+    lblWaterLevel: 'ระดับน้ำ',
+    hintWater: 'ทุกจุดที่อยู่ต่ำกว่าหรือเท่ากับระดับนี้จะพิมพ์ด้วยสีน้ำ รวมกับทะเลสาบและแม่น้ำที่ OpenStreetMap รู้จัก ผิวยังคงความสูงต่ำเดิม — เป็นการลงสี ไม่ใช่ปรับให้ราบ',
+    bandWater: 'น้ำ',
+    fmtWaterUpTo: '≤ {hi} ม.',
+    fmtWaterLakes: 'แหล่งน้ำ · ≤ {hi} ม.',
+    bandLowest: 'แถบ {n} · ต่ำสุด',
+    bandMid: 'แถบ {n}',
+    bandPeak: 'แถบ {n} · ยอด',
+    unitM: 'ม.',
+    btnBandReset: 'คืนค่าแบ่งเท่ากัน',
+    lblWaterAuto: 'ใช้ 4 แถบเมื่อไม่มีน้ำ',
+    noteBandsReset: 'ช่วงระดับความสูงเปลี่ยนไป จึงคืนค่าขอบเขตแถบเป็นการแบ่งเท่ากันแล้ว',
+    hintBands: 'ภูมิประเทศถูกแบ่งเป็นแถบระดับความสูง {n} แถบ — พิมพ์ตัวเลขเพื่อย้ายขอบเขต แต่ละแถบส่งออกเป็นชิ้นทึบของตัวเองพร้อมกำหนดวัสดุ Bambu Studio จึงจับคู่กับช่องฟิลาเมนต์ AMS ได้ {total} ช่อง',
 
     g5Title: '5 · ถาดกรอบ',
     tabNoFrame: 'ไม่มีกรอบ',
@@ -336,7 +352,7 @@
     pgPieces: 'กำลังตัดชิ้นจิ๊กซอว์…',
     pgRoute: 'กำลังปั๊มเส้นทาง…',
     pgRouteThrough: 'กำลังเจาะเส้นทางทะลุ…',
-    pgBambu: 'กำลังสร้างไฟล์ 3MF 4 สี…',
+    pgBambu: 'กำลังสร้างไฟล์ 3MF {n} สี…',
 
     errSearchFailed: 'ค้นหาไม่สำเร็จ',
     errNoResults: 'ไม่พบผลลัพธ์สำหรับ “{query}”',

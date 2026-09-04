@@ -199,3 +199,33 @@
   .color-grid input[type=color] { width:32px; height:26px; border:none; background:none; padding:0; cursor:pointer; }
   .color-grid .band-range { display:block; font-size:10px; color:var(--muted); }
   .color-grid b { color:var(--text); font-weight:600; }
+
+  /* Elevation band rows: colour swatch | name | editable metre range.
+     `.color-grid` above is still used by the frame-plate colours, so it stays. */
+  .band-list { display:flex; flex-direction:column; gap:6px; }
+  .band-row { display:grid; grid-template-columns:32px 1fr auto; align-items:center; gap:8px;
+    background:#0e1318; border:1px solid var(--line); border-radius:8px; padding:6px 8px; }
+  .band-row[hidden] { display:none; }
+  .band-row input[type=color] { width:32px; height:26px; border:none; background:none; padding:0; cursor:pointer; }
+  .band-name { font-size:11px; color:var(--text); font-weight:600; cursor:pointer; }
+  .band-range { display:flex; align-items:center; gap:3px; font-size:10px; color:var(--muted);
+    font-variant-numeric:tabular-nums; white-space:nowrap; }
+  /* `input[type=number]{width:100%}` earlier is (0,1,1) — this must be (0,1,1) too, hence `input.` */
+  input.band-cut { width:52px; padding:2px 4px; font-size:10px; border-radius:5px; text-align:right;
+    font-variant-numeric:tabular-nums; }
+  input.band-cut::-webkit-outer-spin-button, input.band-cut::-webkit-inner-spin-button { margin-left:2px; }
+  .band-cut[hidden], .band-dash[hidden], .band-static[hidden] { display:none; }
+  .band-static { color:var(--muted); }
+  .band-actions { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    flex-wrap:wrap; margin-top:8px; }
+  .band-actions button { padding:5px 9px; font-size:11px; }
+  .band-check { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); cursor:pointer; }
+  .band-check input { width:auto; margin:0; accent-color:var(--accent); }
+  .band-note { color:var(--accent); }
+  .band-note:empty { display:none; }
+
+  /* Under a narrow sidebar the range cell no longer fits beside the name. */
+  @media (max-width: 340px) {
+    .band-row { grid-template-columns:32px 1fr; }
+    .band-range { grid-column:2; }
+  }
