@@ -72,6 +72,7 @@
     lblPiecesDown: 'Pieces down',
     hintSinglePiece: 'The 1 × 1 default is a single terrain model with no puzzle cuts.',
     lblDetail: 'Detail (grid)',
+    hintTerrainDetail: 'Increase up to 1000² for ultra-fine terrain. Very high settings can take a long time and use substantial memory, especially with multiple regions.',
     lblVex: 'Vertical exaggeration',
 
     /* ---- 3 · Print size ---- */
@@ -291,6 +292,7 @@
     lblPiecesDown: 'จำนวนชิ้นแนวตั้ง',
     hintSinglePiece: 'ค่าเริ่มต้น 1 × 1 คือโมเดลภูมิประเทศชิ้นเดียว ไม่มีรอยตัดจิ๊กซอว์',
     lblDetail: 'ความละเอียด (กริด)',
+    hintTerrainDetail: 'เพิ่มได้สูงสุด 1000² เพื่อรายละเอียดภูมิประเทศที่ละเอียดมาก ค่าที่สูงมากอาจใช้เวลานานและใช้หน่วยความจำจำนวนมาก โดยเฉพาะเมื่อเลือกหลายภูมิภาค',
     lblVex: 'อัตราขยายแนวตั้ง',
 
     g3Title: '3 · ขนาดงานพิมพ์',
