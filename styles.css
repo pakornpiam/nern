@@ -240,3 +240,10 @@
     .band-row { grid-template-columns:32px 1fr; }
     .band-range { grid-column:2; }
   }
+[hidden] { display: none !important; }
+#terrainKeyGroup { margin: 10px 0; }
+#terrainKeyGroup a { color: #4dd0a7; font-size: 12px; }
+#detailPreset, #terrainSource { width: 100%; }
+#detailNotes { line-height: 1.55; }
+#sourceStat { max-width: 65%; text-align: right; }
+#cancelGeneration { display: block; margin: 14px auto 0; min-width: 100px; }

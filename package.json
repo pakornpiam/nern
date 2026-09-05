@@ -1,0 +1,12 @@
+{
+  "name": "topopuzzle",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "test:browser": "playwright test",
+    "vendor": "node scripts/vendor.cjs"
+  },
+  "dependencies": { "manifold-3d": "3.5.1" },
+  "devDependencies": { "@playwright/test": "1.63.0" }
+}
