@@ -56,6 +56,27 @@ ratio the short side reaches the 60-sample floor and cells stop being square.
 prints 180 × 45 mm rather than overrunning the plate. Circle and hex print shapes
 inscribe themselves in the rectangle, so a circle becomes an ellipse.
 
+## Water layer
+
+**Enable water layer** is on by default and behaves as it always did: everything at or
+below the water level, plus the lakes and rivers OpenStreetMap knows about, prints in the
+water colour, and the AMS holds 3 land bands + blue.
+
+Turning it off does three things. No Overpass request is made at all, so a desert or an
+inland city generates with one less network dependency. The water level and the flatten
+option disappear, since neither means anything without a water surface. And the freed
+filament slot becomes **band 1** — an ordinary elevation band with its own colour picker
+and its own editable altitude, so the print still uses four colours, just all of them
+terrain. Its default colour is the dark blue `#2c5c8f`; pick something else if that reads
+as water to you.
+
+Toggling restamps the preview from the cached elevation data in both directions — the
+switch never discards the OSM mask, it only tells the build to ignore it. The exception is
+a model *generated* with water off: that source skipped the Overpass call, so re-enabling
+water asks you to press Generate rather than silently showing nothing. Note that moving
+between 3 and 4 bands changes how many boundaries there are, so your typed cuts reset to
+an even split and the app says so.
+
 ## Route dimensions
 
 **Route width**, **Groove depth** / **Ridge height**, and — for the full-depth route —

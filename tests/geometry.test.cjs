@@ -236,3 +236,54 @@ test('a route thinner than the sampling grid still reaches the print', async () 
   assert.equal(fine.routeAskedWidthMM, 3.2);
   assert.equal(fine.grid.routeHalf, 1.6);
 });
+test('the water layer can be switched off, freeing its slot as a fourth land band', async () => {
+  // The fixture's left third is an OSM lake, so this exercises the case the level
+  // alone cannot reach: `osmWater[v] ||` short-circuits the level test entirely.
+  const wet = m => m.grid.water.reduce((n, v) => n + v, 0);
+
+  // Water on (and absent, as every other fixture in this file leaves it) is unchanged.
+  const on = TopoGeometry.buildGeometry(source({ water: true, slope: 4 }), options());
+  assert.equal(on.hasWater, true);
+  assert.equal(on.NB, 3);
+  assert.ok(wet(on) > 0);
+  assert.ok(on.landMin > on.minE, 'the lake should lift landMin above the true minimum');
+
+  const off = TopoGeometry.buildGeometry(source({ water: true, slope: 4 }), options({ waterEnabled: false }));
+  assert.equal(off.hasWater, false);
+  assert.equal(off.hasOsmWater, false);
+  assert.equal(wet(off), 0, 'mapped lakes must be ignored, not merely out-scored');
+  assert.equal(off.NB, 4, 'the freed slot becomes a fourth land band');
+  // landMinOf promises this, and it is what makes the fourth band span the real range.
+  assert.equal(off.landMin, off.minE);
+  assert.equal(off.grid.capCell, null);
+
+  // #waterAuto governs the freed slot only when water is ON but none was found. An
+  // explicit off always reuses it, so the checkbox must not be able to contradict it.
+  const offNoFallback = TopoGeometry.buildGeometry(source({ water: true, slope: 4 }),
+    options({ waterEnabled: false, autoFallback: false }));
+  assert.equal(offNoFallback.NB, 4);
+
+  // flattenWaterHeights rewrites Hv in place and re-derives minE/maxE, so leaving it
+  // to run with the layer off would move the elevation range of a print showing no
+  // water at all. Flatten on/off must be indistinguishable once water is disabled.
+  const offFlat = TopoGeometry.buildGeometry(source({ water: true, slope: 4 }),
+    options({ waterEnabled: false, flattenWater: true }));
+  assert.equal(offFlat.minE, off.minE);
+  assert.equal(offFlat.maxE, off.maxE);
+  assert.equal(offFlat.grid.capCell, null);
+  // ...and the flatten really does move the range when water IS on, so the check above
+  // is comparing against something that would otherwise differ.
+  const onFlat = TopoGeometry.buildGeometry(source({ water: true, slope: 4 }), options({ flattenWater: true }));
+  assert.ok(onFlat.minE > off.minE, 'flatten should raise minE when water is on');
+
+  // The pieces still print, and the four bands still reconstruct them.
+  const { exportSolids } = await city;
+  const volume = await checkClosed(off.pieces[0].pos);
+  off.zCuts = [11, 12, 13];
+  const parts = await exportSolids(off);
+  assert.equal(parts[0].bands.length, 4);
+  assert.equal(parts[0].water.length, 0, 'no water solid, so no blue filament');
+  let sum = 0;
+  for (const pos of parts[0].bands) if (pos.length) sum += await checkClosed(pos);
+  assert.ok(Math.abs(sum - volume) / volume < 1e-3, `${sum} vs ${volume}`);
+});

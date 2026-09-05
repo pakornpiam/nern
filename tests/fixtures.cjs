@@ -24,7 +24,7 @@ function source({ samples = 24, samplesY, slope = 0, buildings, water = false, b
 }
 function options(overrides = {}) {
   return { bounds, samples: 24, nx: 1, ny: 1, vex: 2.5, widthMM: 180, baseMM: 3,
-    waterLevelM: 0.3, autoFallback: true, flattenWater: false, routeMode: 'off', routePath: null,
+    waterLevelM: 0.3, waterEnabled: true, autoFallback: true, flattenWater: false, routeMode: 'off', routePath: null,
     frameStyle: 'none', includeBuildings: true, buildingScale: 1, terrainProvider: 'terrarium', ...overrides };
 }
 module.exports = { bounds, wideBounds, rectangle, feature, source, options };

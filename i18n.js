@@ -86,6 +86,7 @@
 
     /* ---- 4 · Colors ---- */
     g4Title: '4 · Colors (Bambu AMS)',
+    lblWaterEnabled: 'Enable water layer',
     lblWaterLevel: 'Water level',
     hintWater: 'Everything at or below this height prints in the water colour, together with the lakes and rivers OpenStreetMap knows about. The surface keeps its relief — it is painted, not flattened.',
     lblWaterFlatten: 'Flatten the water surface',
@@ -180,6 +181,7 @@
     stGpsFailed: 'GPS failed: {why}{note}',
     stAreaFit: 'Area fit to route: {x} × {y} km',
     stRouteDeleted: 'Route deleted',
+    stWaterNeedsGenerate: 'This model was built without water data, so there is nothing to show. Press Generate to fetch it.',
     stRouteOutside: 'The route lies outside the puzzle area, so it was not added to the print. Use Fit area, or move the box over the track.',
     stRouteTooThin: 'A {asked} mm route is finer than this grid can carry, so it was widened to {used} mm. Raise Detail for a thinner route.',
     stDownloaded: 'Downloaded {file}',
@@ -309,6 +311,7 @@
     lblBase: 'ความหนาฐาน',
 
     g4Title: '4 · สี (Bambu AMS)',
+    lblWaterEnabled: 'เปิดใช้ชั้นน้ำ',
     lblWaterLevel: 'ระดับน้ำ',
     hintWater: 'ทุกจุดที่อยู่ต่ำกว่าหรือเท่ากับระดับนี้จะพิมพ์ด้วยสีน้ำ รวมกับทะเลสาบและแม่น้ำที่ OpenStreetMap รู้จัก ผิวยังคงความสูงต่ำเดิม — เป็นการลงสี ไม่ใช่ปรับให้ราบ',
     lblWaterFlatten: 'ปรับผิวน้ำให้ราบ',
@@ -399,6 +402,7 @@
     stGpsFailed: 'GPS ล้มเหลว: {why}{note}',
     stAreaFit: 'ปรับพื้นที่ให้พอดีกับเส้นทาง: {x} × {y} กม.',
     stRouteDeleted: 'ลบเส้นทางแล้ว',
+    stWaterNeedsGenerate: 'โมเดลนี้สร้างขึ้นโดยไม่มีข้อมูลน้ำ จึงยังไม่มีอะไรให้แสดง กด “สร้างภูมิประเทศ” เพื่อดึงข้อมูล',
     stRouteOutside: 'เส้นทางอยู่นอกพื้นที่จิ๊กซอว์ จึงไม่ถูกเพิ่มลงในชิ้นงาน กด “พอดีพื้นที่” หรือเลื่อนกรอบให้ครอบเส้นทาง',
     stRouteTooThin: 'เส้นทางกว้าง {asked} มม. ละเอียดเกินกว่าที่กริดนี้รองรับ จึงขยายเป็น {used} มม. เพิ่มค่าความละเอียดหากต้องการเส้นทางที่บางลง',
     stDownloaded: 'ดาวน์โหลด {file} แล้ว',

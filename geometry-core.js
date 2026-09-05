@@ -291,6 +291,7 @@ function buildGeometry(src, opts, onStep = () => {}) {
 
   const water = new Uint8Array(VW * VD);
   const piece = buildPartition(W, D, nx, ny);
+  const waterOn = opts.waterEnabled !== false;   // absent means on, as it always was
 
   // --- physical scaling ---
   const boxWidthM = haversine((latN + latS) / 2, lonW, (latN + latS) / 2, lonE);
@@ -332,7 +333,10 @@ function buildGeometry(src, opts, onStep = () => {}) {
   // Running this after the emboss would erase any route crossing water — a river
   // route, the likeliest case, would vanish. Before it, the groove is cut into
   // the flat plane and the inlay's undo record still reconstructs it correctly.
-  if (opts.flattenWater) {
+  // With the water layer switched off this must not run at all: it rewrites Hv in
+  // place and re-derives minE/maxE, so it would move the elevation range for a
+  // print that is not showing water anyway.
+  if (opts.flattenWater && waterOn) {
     flattenWaterHeights(Hv, osmWater, opts.waterLevelM, VW, VD);
     minE = Infinity; maxE = -Infinity;
     for (let k = 0; k < Hv.length; k++) { const e = Hv[k]; if (e < minE) minE = e; if (e > maxE) maxE = e; }
@@ -570,6 +574,9 @@ function buildGeometry(src, opts, onStep = () => {}) {
   const model = {
     pieces, routeParts, nx, ny, W, D, minE, maxE, triCount, src, opts,
     flatWater: !!opts.flattenWater,
+    // The water layer is off entirely: no mask, no blue slot, no flatten. Carried on
+    // the model so the page's cheap recolour path can flip it without a rebuild.
+    waterOff: !waterOn,
     routeMode: opts.routeMode, routeTop: opts.routeTop || 'flush', routeJoin: opts.routeJoin || 'piece',
     // What the grid could carry, and what was asked for — equal unless the route was
     // too thin to survive sampling at this detail.
@@ -738,19 +745,24 @@ function applyWaterLevel(model, level, autoFallback) {
   // flatten stores the plane as a float32, so compare against the same value
   const lvc = model.flatWater ? levelF32(lv) : lv;
   let any = false;
-  for (let v = 0; v < g.water.length; v++) {
+  // The level cannot express "no water": normLevel coerces a non-finite level back
+  // to 0.3, and an OSM lake short-circuits the level test below regardless. Hence
+  // the explicit flag rather than an out-of-range level.
+  if (model.waterOff) g.water.fill(0);
+  else for (let v = 0; v < g.water.length; v++) {
     const w = (g.osmWater[v] || g.Hv[v] <= lvc) ? 1 : 0;
     g.water[v] = w; if (w) any = true;
   }
   model.waterLevelM = lv;
   model.hasWater = any;
-  model.hasOsmWater = g.osmWater.some(v => v === 1);
+  model.hasOsmWater = !model.waterOff && g.osmWater.some(v => v === 1);
   model.landMin = landMinOf(g.Hv, g.water, model.minE, model.maxE, lv);
   // no water → release the blue slot and go back to 4 land bands, unless the
-  // user has turned that fallback off
-  model.NB = (any || autoFallback === false) ? 3 : 4;
+  // user has turned that fallback off. Switching the layer off is that choice
+  // made deliberately, so the freed slot is always reused.
+  model.NB = model.waterOff ? 4 : (any || autoFallback === false) ? 3 : 4;
   // null here is the single gate that keeps the whole pre-flatten export path
-  g.capCell = model.flatWater ? buildCapCellMask(g.water, g.W, g.D, g.VW) : null;
+  g.capCell = model.flatWater && !model.waterOff ? buildCapCellMask(g.water, g.W, g.D, g.VW) : null;
   return model;
 }
 
