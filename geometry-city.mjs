@@ -98,13 +98,16 @@ export async function fuseCity(model, progress = () => {}) {
     } else if (['engrave', 'emboss'].includes(model.routeMode) && model.opts.routePath?.length > 1) {
       const [[s, w], [n, e]] = model.src.bounds;
       const pts = model.opts.routePath.map(([lat, lon]) => [(lon - w) / (e - w) * model.modelWidth, (lat - s) / (n - s) * model.modelDepth]);
+      // The half-width buildGeometry actually stamped with — read off the grid rather
+      // than re-resolved, since that value may have been floored to the cell size.
+      const half = model.grid.routeHalf ?? TopoGeometry.resolveRouteDims(model.opts).halfW;
       const strips = [];
       for (let i = 1; i < pts.length; i++) {
         const a = pts[i - 1], b = pts[i], len = Math.hypot(b[0] - a[0], b[1] - a[1]);
         if (!len) continue;
-        const dx = (b[1] - a[1]) / len * 0.9, dy = -(b[0] - a[0]) / len * 0.9;
+        const dx = (b[1] - a[1]) / len * half, dy = -(b[0] - a[0]) / len * half;
         strips.push(own(new CrossSection([[[a[0] + dx, a[1] + dy], [b[0] + dx, b[1] + dy], [b[0] - dx, b[1] - dy], [a[0] - dx, a[1] - dy]]], 'EvenOdd')));
-        strips.push(own(own(CrossSection.circle(0.9, 16)).translate(a)), own(own(CrossSection.circle(0.9, 16)).translate(b)));
+        strips.push(own(own(CrossSection.circle(half, 16)).translate(a)), own(own(CrossSection.circle(half, 16)).translate(b)));
       }
       if (strips.length) routeClearance = own(CrossSection.union(strips));
     }

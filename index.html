@@ -76,10 +76,23 @@
       <select id="routeMode">
         <option value="inlay" selected data-i18n="optInlay">Red inlay — separate printable part</option>
         <option value="through" data-i18n="optThrough">Full-depth route — removable top-to-bottom piece</option>
-        <option value="emboss" data-i18n="optEmboss">Raised ridge (~1 mm)</option>
-        <option value="engrave" data-i18n="optEngrave">Engraved groove (~0.8 mm)</option>
+        <option value="emboss" data-i18n="optEmboss">Raised ridge</option>
+        <option value="engrave" data-i18n="optEngrave">Engraved groove</option>
         <option value="off" data-i18n="optOff">Off</option>
       </select>
+      <!-- The label spans carry NO data-i18n: the depth label swaps key by mode, so
+           renderRouteUI owns them and applyI18n must not write over it. Same hazard
+           the #areaVal comment below documents. -->
+      <div class="two-col" style="margin-top:8px">
+        <div>
+          <label class="row" style="margin:0 0 4px" for="routeWidth"><span id="routeWidthLbl">Route width</span> <span class="val"><span id="routeWidthVal">3.2</span> mm</span></label>
+          <input id="routeWidth" type="range" min="0.6" max="12" value="3.2" step="0.1" />
+        </div>
+        <div>
+          <label class="row" style="margin:0 0 4px" for="routeDepth"><span id="routeDepthLbl">Groove depth</span> <span class="val"><span id="routeDepthVal">1.2</span> mm</span></label>
+          <input id="routeDepth" type="range" min="0.2" max="3" value="1.2" step="0.1" />
+        </div>
+      </div>
       <div id="throughRouteOpts" style="display:none">
         <div class="two-col" style="margin-top:8px">
           <div>
@@ -97,7 +110,10 @@
             </select>
           </div>
         </div>
-        <div class="hint" data-i18n="hintThroughRoute">The 3.2 mm route reaches the print bottom. Its channel is 3.6 mm wide, leaving 0.2 mm clearance on each side for assembly.</div>
+        <label class="row" style="margin:8px 0 4px" for="routeClearance"><span id="routeClearanceLbl">Fit clearance</span> <span class="val"><span id="routeClearanceVal">0.20</span> mm</span></label>
+        <!-- routeClearance, not routeClear: that id is already the delete-route button above. -->
+        <input id="routeClearance" type="range" min="0" max="0.8" value="0.2" step="0.05" />
+        <div class="hint" id="routeHint">The 3.2 mm route reaches the print bottom. Its channel is 3.6 mm wide, leaving 0.2 mm clearance on each side for assembly.</div>
       </div>
       <!-- #areaVal is a SIBLING of the data-i18n span: applyI18n assigns textContent
            to every [data-i18n] element and would otherwise wipe the live value.
@@ -266,7 +282,7 @@
       <div class="legend-labels"><span id="loStat" data-i18n="legendLow">low</span><span id="hiStat" data-i18n="legendHigh">high</span></div>
     </div>
 
-    <button id="exportBambu" class="ghost" disabled data-i18n="btnExportBambu">⬇ Export Bambu 3MF — terrain + route (2 files)</button>
+    <button id="exportBambu" class="ghost" disabled data-i18n="btnExportBambu">⬇ Export Bambu 3MF — terrain + route</button>
     <button id="exportZip" class="ghost" disabled data-i18n="btnExportZip">⬇ Export puzzle pieces (.zip of STL)</button>
     <button id="exportOne" class="ghost" disabled data-i18n="btnExportOne">⬇ Export single combined STL</button>
     <button id="exportFrame" class="ghost" disabled data-i18n="btnExportFrame">⬇ Export frame plate (STL)</button>
@@ -1103,13 +1119,50 @@ $('routeSave').addEventListener('click', () => {
   setStatusKey('stDownloaded', { file }, 'ok');
 });
 
-// The full-depth route has extra choices; the shallow modes have none.
-function syncRouteModeUI() {
-  $('throughRouteOpts').style.display = $('routeMode').value === 'through' ? '' : 'none';
+// The one reader of the dimension sliders, so generate() and the rebuild path
+// cannot drift apart on what they send the worker.
+const routeDimOpts = () => ({
+  routeWidthMM: parseFloat($('routeWidth').value),
+  routeDepthMM: parseFloat($('routeDepth').value),
+  routeClearMM: parseFloat($('routeClearance').value)
+});
+/* The full-depth route has extra choices; the shallow modes have none. This also
+   owns every piece of route text that depends on runtime state — the depth label,
+   which swaps key by mode, and the through-route hint, whose numbers the sliders
+   move — because applyI18n would otherwise write the raw template over them. */
+function renderRouteUI() {
+  const mode = $('routeMode').value, off = mode === 'off', through = mode === 'through';
+  $('throughRouteOpts').style.display = through ? '' : 'none';
+  $('routeWidth').disabled = off;
+  // A full-depth route reaches the bottom by definition, so depth means nothing there.
+  $('routeDepth').disabled = off || through;
+  $('routeWidthLbl').textContent = t('lblRouteWidth');
+  $('routeDepthLbl').textContent = t(mode === 'emboss' ? 'lblRouteHeight' : 'lblRouteDepth');
+  $('routeClearanceLbl').textContent = t('lblRouteClear');
+  const d = routeDimOpts();
+  $('routeHint').textContent = t('hintThroughRoute', {
+    route: d.routeWidthMM.toFixed(1),
+    channel: (d.routeWidthMM + 2 * d.routeClearMM).toFixed(1),
+    clear: d.routeClearMM.toFixed(2)
+  });
 }
-$('routeMode').addEventListener('change', syncRouteModeUI);
-syncRouteModeUI();
+$('routeMode').addEventListener('change', renderRouteUI);
+renderRouteUI();
 
+/* Route dimensions only restamp geometry the cached source already covers, so they
+   take the debounced worker rebuild rather than a full re-fetch — the same path
+   onWaterSettingChange uses. They are deliberately absent from generationInputs:
+   that list wires every id to cancelActiveWork, which aborts rebuildController and
+   would kill the rebuild this handler just scheduled. #waterLevel is absent for the
+   same reason, and like water, a change mid-generate is applied by the queued
+   rebuild afterwards instead of invalidating the signature. */
+function onRouteDimChange(echo) {
+  renderRouteUI();
+  if ($('routeMode').value === 'off' || !currentRoutePts()) return; // nothing to restamp
+  if ($('generate').disabled) { scheduleGeometryRebuild(echo ? 0 : 120); return; }
+  if (!state.models.length) return;
+  scheduleGeometryRebuild(echo ? 0 : 120);
+}
 /* ---------- Slider bindings ---------- */
 function bindSlider(id, valId, fmt = (v) => v, onChange = null) {
   const el = $(id), out = $(valId);
@@ -1151,6 +1204,11 @@ bindSlider('width', 'widthVal', v => v, () => {
   if (state.selectedRegions.length && !state.models.length) showRegionPreview(true);
 });
 bindSlider('base', 'baseVal', v => (+v));
+for (const [id, valId, digits] of [['routeWidth', 'routeWidthVal', 1], ['routeDepth', 'routeDepthVal', 1], ['routeClearance', 'routeClearanceVal', 2]]) {
+  bindSlider(id, valId, v => (+v).toFixed(digits));
+  $(id).addEventListener('input', () => onRouteDimChange(false));
+  $(id).addEventListener('change', () => onRouteDimChange(true));
+}
 
 /* ============================================================================
    WATER MASK — OSM water polygons (Overpass API), rasterized onto the
@@ -1503,7 +1561,7 @@ async function rebuildGeometryNow() {
     const models = [];
     for (const old of oldModels) {
       const opts = { ...old.opts, waterLevelM: state.waterLevelM,
-        autoFallback: $('waterAuto').checked, flattenWater: flattenOn() };
+        autoFallback: $('waterAuto').checked, flattenWater: flattenOn(), ...routeDimOpts() };
       const model = await TopoWorker.run('build', { src: old.src, opts }, { signal: controller.signal,
         progress: (key, params) => overlay(true, t(key, params)) });
       model.src = old.src;
@@ -2420,14 +2478,25 @@ async function exportBambu() {
       setStatusKey('stDownloaded', { file }, 'ok');
     } else {
       const { terrainBlob, routeBlob } = await buildBambuFiles(state.models[0]);
-      download(terrainBlob, exportPrefix() + '_bambu_4color.3mf');
+      const prefix = exportPrefix();
       if (routeBlob) {
-      // browsers gate back-to-back downloads from one gesture; give the first
-      // one a moment to be accepted before asking for the second
-      await new Promise(r => setTimeout(r, 500));
-      download(routeBlob, exportPrefix() + '_bambu_route.3mf');
-      setStatusKey('stBambuDoneRoute', null, 'ok');
-      } else setStatusKey('stBambuDone', null, 'ok');
+        /* Both parts have to arrive in ONE download. Chrome allows a page a single
+           programmatic download and puts any further one behind the "Automatic
+           downloads" permission, which defaults to ask — and this export builds its
+           blobs over several seconds of CSG, so by the time either a.click() fires
+           the user's gesture is long gone. Asking twice therefore lost the route
+           file outright for anyone who had not granted that permission, with no
+           error to show for it. Zipping matches the separate-regions path above. */
+        const zip = new JSZip();
+        zip.file(prefix + '_bambu_4color.3mf', terrainBlob);
+        zip.file(prefix + '_bambu_route.3mf', routeBlob);
+        const file = prefix + '_bambu.zip';
+        download(await zip.generateAsync({ type: 'blob' }), file);
+        setStatusKey('stBambuDoneRoute', { file }, 'ok');
+      } else {
+        download(terrainBlob, prefix + '_bambu_4color.3mf');
+        setStatusKey('stBambuDone', null, 'ok');
+      }
     }
   } catch (e) {
     if (e.name === 'AbortError') setStatusKey('stCancelled');
@@ -2541,6 +2610,7 @@ async function generate() {
       routeMode: $('routeMode').value,
       routeTop: $('routeTop').value,
       routeJoin: $('routeJoin').value,
+      ...routeDimOpts(),
       frameStyle: currentPrintShape(),
       routePath,
     };
@@ -2604,6 +2674,15 @@ async function generate() {
         return la >= latS && la <= latN && lo >= lonW && lo <= lonE;
       }));
       if (!anyInside) setStatusKey('stRouteOutside', null, 'err');
+      else {
+        /* A route thinner than the vertex spacing is stamped nowhere at all and the
+           print silently loses its route part, so the geometry widens it to what the
+           grid can carry. Say so — the number on the slider is not what was cut. */
+        const thin = models.find(m => m.routeStampedWidthMM > m.routeAskedWidthMM + 1e-6);
+        if (thin) setStatusKey('stRouteTooThin', {
+          asked: thin.routeAskedWidthMM.toFixed(1), used: thin.routeStampedWidthMM.toFixed(1)
+        }, 'warn');
+      }
     }
   } catch (e) {
     if (e.name === 'AbortError') setStatusKey('stCancelled');
@@ -2824,6 +2903,7 @@ function setLang(code, persist) {
 
   // text that applyI18n cannot own, because it depends on runtime state
   renderAreaUI();
+  renderRouteUI();
   refreshRouteBtn();
   refreshRegionButton();
   refreshRegionList();
