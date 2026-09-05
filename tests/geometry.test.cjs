@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { source, options, feature, rectangle } = require('./fixtures.cjs');
+const { source, options, feature, rectangle, wideBounds } = require('./fixtures.cjs');
 const city = import('../geometry-city.mjs');
 
 async function checkClosed(pos) {
@@ -88,4 +88,19 @@ test('administrative boundaries with holes clip city foundations', async () => {
   await checkClosed(model.pieces[0].pos);
   const solid = fromSoup(api, model.pieces[0].pos), hole = api.Manifold.cube([10, 10, model.maxZ]).translate([85, 85, 0]), overlap = solid.intersect(hole);
   assert.equal(overlap.volume(), 0); overlap.delete(); hole.delete(); solid.delete();
+});
+test('rectangular selections fit the maximum model size and still print solid pieces', async () => {
+  // 4:1 bounds with a proportionally sized grid: the shape the app now produces.
+  const model = TopoGeometry.buildGeometry(source({ samples: 80, samplesY: 20, bounds: wideBounds }),
+    options({ bounds: wideBounds, nx: 2, ny: 2 }));
+  // widthMM is the longest side, whichever axis that is.
+  assert.ok(Math.abs(Math.max(model.modelWidth, model.modelDepth) - 180) < 1e-6);
+  assert.ok(model.modelDepth < model.modelWidth);          // aspect survives
+  assert.ok(Math.abs(model.modelWidth / model.modelDepth - 4) < 0.01);
+  // A proportional grid keeps terrain cells square.
+  assert.ok(Math.abs(model.grid.dx - model.grid.dy) / model.grid.dx < 0.01);
+  assert.ok(Math.abs(model.pieceW - model.modelWidth / 2) < 1e-9);
+  assert.ok(Math.abs(model.pieceH - model.modelDepth / 2) < 1e-9);
+  // The real proof that W !== D stays manifold through walls, caps and the partition.
+  for (const p of model.pieces) await checkClosed(p.pos);
 });

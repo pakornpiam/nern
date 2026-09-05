@@ -2,6 +2,10 @@
 (function (root) {
   'use strict';
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  /* Grid size per axis. A scalar is a square grid, so existing callers are unchanged. */
+  const axes = s => Array.isArray(s)
+    ? [Math.max(1, Math.round(s[0])), Math.max(1, Math.round(s[1]))]
+    : [Math.max(1, Math.round(s)), Math.max(1, Math.round(s))];
   const decoders = {
     terrarium: (r, g, b) => r * 256 + g + b / 256 - 32768,
     maptiler: (r, g, b) => -10000 + (r * 65536 + g * 256 + b) * 0.1,
@@ -76,7 +80,8 @@
   function choose(bounds, samples, p, budget = 36) {
     const [[s, w], [n, e]] = bounds;
     if (!(s < n && w < e && s >= -85.05112878 && n <= 85.05112878 && w >= -180 && e <= 180)) throw coded('errTerrainBounds');
-    const dims = dimensions(bounds), spacing = Math.max(...dims) / samples;
+    const dims = dimensions(bounds), [sx, sy] = axes(samples);
+    const spacing = Math.min(dims[0] / sx, dims[1] / sy);
     const base = 40075016.686 * Math.cos((s + n) / 2 * Math.PI / 180) / p.tileSize;
     const requested = clamp(Math.ceil(Math.log2(base / spacing)), p.minZoom, p.maxZoom);
     let zoom = requested, rect;
@@ -85,7 +90,9 @@
       if ((rect.x1 - rect.x0 + 1) * (rect.y1 - rect.y0 + 1) <= budget || zoom === p.minZoom) break;
       zoom--;
     }
-    return { zoom, rect, limited: zoom < requested, tileSpacing: base / 2 ** zoom, meshSpacing: spacing, dimensions: dims };
+    return { zoom, rect, limited: zoom < requested, tileSpacing: base / 2 ** zoom,
+      meshSpacing: Math.max(dims[0] / sx, dims[1] / sy),
+      meshSpacingX: dims[0] / sx, meshSpacingY: dims[1] / sy, dimensions: dims };
   }
   async function decode(blob, p) {
     const bitmap = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
@@ -152,7 +159,7 @@
         abort(downloadSignal); onProgress(++done, jobs.length);
       }, downloadSignal);
     } catch (e) { downloads.abort(); throw e; }
-    const sample = sampler(tiles, p, zoom, rect), W = samples, D = samples, VW = W + 1, VD = D + 1;
+    const sample = sampler(tiles, p, zoom, rect), [W, D] = axes(samples), VW = W + 1, VD = D + 1;
     const Hv0 = new Float32Array(VW * VD), [[s, w], [n, e]] = bounds;
     let minE0 = Infinity, maxE0 = -Infinity;
     for (let j = 0; j <= D; j++) {
@@ -162,9 +169,10 @@
         Hv0[j * VW + i] = h; minE0 = Math.min(minE0, h); maxE0 = Math.max(maxE0, h);
       }
     }
-    return { Hv0, W, D, VW, VD, bounds, samples, minE0, maxE0, zoom,
+    return { Hv0, W, D, VW, VD, bounds, samples, samplesX: W, samplesY: D, minE0, maxE0, zoom,
       terrainInfo: { provider: id, source: p.name, attribution: p.attribution, tileSpacing: choice.tileSpacing,
-        meshSpacing: choice.meshSpacing, limited: choice.limited, tiles: jobs.length } };
+        meshSpacing: choice.meshSpacing, meshSpacingX: choice.meshSpacingX, meshSpacingY: choice.meshSpacingY,
+        limited: choice.limited, tiles: jobs.length } };
   }
-  root.TopoTerrain = { elevation, dimensions, decoders, choose, provider, request, pool, sampler, tileRect };
+  root.TopoTerrain = { elevation, dimensions, decoders, choose, provider, request, pool, sampler, tileRect, axes };
 })(globalThis);

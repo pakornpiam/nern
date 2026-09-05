@@ -28,8 +28,10 @@ test('controls, city generation, water rebuild, language, STL ZIP and 3MF export
   const errors = await setup(page);
   await expect(page.locator('#res')).toHaveValue('400');
   await page.selectOption('#detailPreset', '800'); await expect(page.locator('#res')).toHaveValue('800');
-  await page.locator('#areaExact').fill('0.25'); await page.locator('#areaExact').dispatchEvent('change');
-  expect(await page.evaluate(() => state.areaKm)).toBe(0.25);
+  await page.locator('#areaX').fill('0.25'); await page.locator('#areaX').dispatchEvent('change');
+  expect(await page.evaluate(() => [state.areaKmX, state.areaKmY])).toEqual([0.25, 24]);
+  await page.locator('#areaY').fill('0.25'); await page.locator('#areaY').dispatchEvent('change');
+  expect(await page.evaluate(() => [state.areaKmX, state.areaKmY])).toEqual([0.25, 0.25]);
   await installFixture(page, { nx: 2, water: true });
   await page.click('#generate');
   await expect(page.locator('#exportOne')).toBeEnabled();
@@ -203,5 +205,49 @@ test('exports carry the searched place name and drop it when the centre moves', 
   expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
   // The built model keeps the place it was generated for until it is replaced.
   expect(await page.evaluate(() => exportPrefix())).toBe('chiang_mai_chiang_mai_province');
+  expect(errors).toEqual([]);
+});
+
+test('an X/Y rectangle drives the bounds, a proportional grid and every readout', async ({ page }) => {
+  const errors = await setup(page);
+  await page.locator('#areaX').fill('20'); await page.locator('#areaX').dispatchEvent('change');
+  await page.locator('#areaY').fill('5'); await page.locator('#areaY').dispatchEvent('change');
+  expect(await page.evaluate(() => [state.areaKmX, state.areaKmY])).toEqual([20, 5]);
+  // The box really is 4:1 on the ground, not just in the inputs.
+  const dims = await page.evaluate(() => TopoTerrain.dimensions(currentAreaBounds()));
+  expect(dims[0] / dims[1]).toBeCloseTo(4, 1);
+  // Detail sets the long axis; the short one scales so cells stay square.
+  expect(await page.evaluate(() => gridSamples(currentAreaBounds(), 400))).toEqual([400, 100]);
+  await expect(page.locator('#areaVal')).toHaveText('20 × 5 km');
+  await expect(page.locator('#resVal')).toHaveText('400 × 100');
+  expect(await page.evaluate(() => boxHandleMarkers.length)).toBe(8);
+  // The slider scales both axes and keeps the shape.
+  await page.locator('#area').fill('40'); await page.locator('#area').dispatchEvent('input');
+  expect(await page.evaluate(() => [state.areaKmX, state.areaKmY])).toEqual([40, 10]);
+  // Thai keeps the numbers and translates the unit.
+  await page.click('#langTh');
+  await expect(page.locator('#areaVal')).toHaveText('40 × 10 กม.');
+  await page.click('#langEn');
+  expect(errors).toEqual([]);
+});
+
+test('an edge handle stretches one axis and a corner moves both', async ({ page }) => {
+  const errors = await setup(page);
+  await page.evaluate(() => setArea(35.36, 138.72, 20, 5));
+  const drag = async (index, dx, dy) => {
+    const box = await page.evaluate(i => boxHandleMarkers[i].getElement().getBoundingClientRect().toJSON(), index);
+    const [cx, cy] = [box.x + box.width / 2, box.y + box.height / 2];
+    await page.mouse.move(cx, cy); await page.mouse.down();
+    await page.mouse.move(cx + dx, cy + dy, { steps: 5 }); await page.mouse.up();
+    return page.evaluate(() => [state.areaKmX, state.areaKmY]);
+  };
+  // Handle 5 is the EAST edge midpoint: X grows, Y must not move at all.
+  const afterEdge = await drag(5, 60, 0);
+  expect(afterEdge[0]).toBeGreaterThan(20);
+  expect(afterEdge[1]).toBe(5);
+  // Handle 1 is the NE corner: both axes respond.
+  const beforeCorner = afterEdge, afterCorner = await drag(1, 40, -40);
+  expect(afterCorner[0]).toBeGreaterThan(beforeCorner[0]);
+  expect(afterCorner[1]).toBeGreaterThan(beforeCorner[1]);
   expect(errors).toEqual([]);
 });

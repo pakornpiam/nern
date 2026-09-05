@@ -39,6 +39,23 @@ Terrain and city data remain limited by source coverage. Tiny buildings at large
 geographic scales may be too small for a particular printer; use a neighborhood
 selection and suitable slicer settings to make their dimensions visible.
 
+## Area shape
+
+The green box is a rectangle with independent axes. Drag a corner to resize both
+sides, an edge midpoint to stretch one, or type exact kilometres into **Width X**
+and **Height Y**. The **Area size** slider scales both axes at once and preserves
+the shape. The centre stays pinned while resizing.
+
+**Terrain detail** sets the grid on the longer side and scales the shorter side to
+match, so cells stay square rather than stretching: a 40 × 10 km selection at
+detail 400 becomes a 400 × 100 grid — even detail in both directions, and a
+quarter of the triangles a forced 400 × 400 grid would cost. Past roughly a 6.7:1
+ratio the short side reaches the 60-sample floor and cells stop being square.
+
+**Maximum model size** applies to whichever side is longer, so a wide selection
+prints 180 × 45 mm rather than overrunning the plate. Circle and hex print shapes
+inscribe themselves in the rectangle, so a circle becomes an ellipse.
+
 ## Export names
 
 Downloads take the name of the place you searched, so `Chiang Mai` yields

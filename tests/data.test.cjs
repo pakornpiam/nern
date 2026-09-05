@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { feature, rectangle, bounds } = require('./fixtures.cjs');
+const { feature, rectangle, bounds, wideBounds } = require('./fixtures.cjs');
 const T = TopoTerrain, B = TopoBuildings;
 
 test('both elevation encodings preserve negative and fractional heights', () => {
@@ -16,6 +16,20 @@ test('zoom respects provider limits, latitude, and rectangular tile budgets', ()
   const wide = T.choose([[0, 0], [0.1, 20]], 1000, p, 4);
   const r = wide.rect; assert.ok((r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) <= 4); assert.equal(wide.limited, true);
   assert.throws(() => T.choose([[0, 179], [1, -179]], 400, p), /errTerrainBounds/);
+});
+test('per-axis grids match a scalar when square and keep the short axis resolved', () => {
+  const p = { minZoom: 1, maxZoom: 15, tileSize: 256 };
+  // A scalar is exactly an equal pair, so every legacy caller is unaffected.
+  assert.equal(T.choose(bounds, [200, 200], p).zoom, T.choose(bounds, 200, p).zoom);
+  // A proportional grid over a 4:1 box: zoom is chosen from the finer axis, so it
+  // can only gain detail, and the reported scalar spacing stays the coarser axis.
+  const prop = T.choose(wideBounds, [400, 100], p), flat = T.choose(wideBounds, 400, p);
+  assert.ok(prop.zoom >= flat.zoom);
+  assert.ok(Math.abs(prop.meshSpacing - flat.meshSpacing) / flat.meshSpacing < 0.02);
+  // Proportional samples over a 4:1 box give square cells.
+  assert.ok(Math.abs(prop.meshSpacingX - prop.meshSpacingY) / prop.meshSpacingX < 0.02);
+  // A square grid on the same box does not: the short axis is oversampled 4x.
+  assert.ok(flat.meshSpacingX / flat.meshSpacingY > 3.5);
 });
 test('sampler interpolates across tile edges and rejects missing elevations', () => {
   const tiles = new Map([['0,0', new Float32Array([0, 10, 20, 30])], ['1,0', new Float32Array([40, 50, 60, 70])]]);

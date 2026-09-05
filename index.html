@@ -99,10 +99,15 @@
         </div>
         <div class="hint" data-i18n="hintThroughRoute">The 3.2 mm route reaches the print bottom. Its channel is 3.6 mm wide, leaving 0.2 mm clearance on each side for assembly.</div>
       </div>
-      <label class="row"><span data-i18n="lblAreaSize">Area size</span> <span class="val"><span id="areaVal">24</span> km</span></label>
+      <!-- #areaVal is a SIBLING of the data-i18n span: applyI18n assigns textContent
+           to every [data-i18n] element and would otherwise wipe the live value.
+           The slider's value must match the larger default axis; renderAreaUI writes it. -->
+      <label class="row"><span data-i18n="lblAreaSize">Area size</span> <span class="val"><span id="areaVal">24 × 24 km</span></span></label>
       <input id="area" type="range" min="0.25" max="120" value="24" step="0.25" />
-      <label class="row" for="areaExact" data-i18n="lblAreaExact">Exact area size (km)</label>
-      <input id="areaExact" type="number" min="0.25" max="120" value="24" step="0.01" />
+      <div class="two-col" style="margin-top:8px">
+        <div><label class="row" style="margin:0 0 4px" for="areaX" data-i18n="lblAreaX">Width X (km)</label><input id="areaX" type="number" min="0.25" max="120" value="24" step="0.01" /></div>
+        <div><label class="row" style="margin:0 0 4px" for="areaY" data-i18n="lblAreaY">Height Y (km)</label><input id="areaY" type="number" min="0.25" max="120" value="24" step="0.01" /></div>
+      </div>
       <div class="two-col" style="margin-top:8px">
         <div><label class="row" style="margin:0 0 4px" data-i18n="lblCenterLat">Center lat</label><input id="lat" type="number" step="0.0001" value="35.3606" /></div>
         <div><label class="row" style="margin:0 0 4px" data-i18n="lblCenterLon">Center lon</label><input id="lon" type="number" step="0.0001" value="138.7274" /></div>
@@ -134,9 +139,9 @@
         <option value="800" data-i18n="detailUltra">Ultra — 800</option>
         <option value="custom" data-i18n="detailCustom">Custom</option>
       </select>
-      <label class="row"><span data-i18n="lblDetail">Detail (grid)</span> <span class="val"><span id="resVal">400</span>²</span></label>
+      <label class="row"><span data-i18n="lblDetail">Detail (grid)</span> <span class="val"><span id="resVal">400 × 400</span></span></label>
       <input id="res" type="range" min="60" max="1000" value="400" step="10" />
-      <div class="hint" data-i18n="hintTerrainDetail">Increase up to 1000² for ultra-fine terrain. Very high settings can take a long time and use substantial memory, especially with multiple regions.</div>
+      <div class="hint" data-i18n="hintTerrainDetail">Detail sets the grid on the longer side; the shorter side scales to match so terrain cells stay square. Tile spacing is separate from source accuracy. Very high settings use more time and memory.</div>
       <label class="row"><span data-i18n="lblVex">Vertical exaggeration</span> <span class="val">×<span id="vexVal">2.5</span></span></label>
       <input id="vex" type="range" min="1" max="10" value="2.5" step="0.1" />
       <label class="band-check"><input id="includeBuildings" type="checkbox" checked /><span data-i18n="lblIncludeBuildings">Include buildings</span></label>
@@ -332,7 +337,7 @@ function cancelActiveWork() {
 /* ---------- App state ---------- */
 const state = {
   center: { lat: 35.3606, lon: 138.7274 }, // Mt Fuji
-  areaKm: 24,
+  areaKmX: 24, areaKmY: 24,   // independent axes; the box is a rectangle
   placeName: '',   // last searched place; names the export files, '' → "topopuzzle"
   selectedRegions: [],
   regionOutputMode: 'combined',
@@ -383,21 +388,38 @@ refreshLayerControl();
 
 /* ============================================================================
    AREA BOX — the green rectangle is the primary control for the puzzle area:
-   drag a corner to resize (centre stays pinned), drag inside to move. The
-   "Area size" slider is a second view of the same number, not the master.
+   drag a corner to resize both axes, an edge midpoint to stretch one, or inside
+   to move. The centre stays pinned while resizing. The "Area size" slider scales
+   both axes at once and preserves the shape; it is a view, not the master.
    ============================================================================ */
 const BOX_COLOR = '#4dd0a7';
 let boxRect = null, boxHandleMarkers = [], boxHandleLayer = null, boxDragged = false;
 
-function boundsFromCenter(lat, lon, km) {
-  const dLat = (km / 2) / 111.32;
-  const dLon = (km / 2) / (111.32 * Math.cos(lat * Math.PI / 180));
+/* kmY defaults to kmX, so a single size still means a square. */
+function boundsFromCenter(lat, lon, kmX, kmY = kmX) {
+  const dLat = (kmY / 2) / 111.32;
+  const dLon = (kmX / 2) / (111.32 * Math.cos(lat * Math.PI / 180));
   return [[lat - dLat, lon - dLon], [lat + dLat, lon + dLon]];
 }
 
+const areaLongKm = () => Math.max(state.areaKmX, state.areaKmY);
+const boxBounds = () => boundsFromCenter(state.center.lat, state.center.lon, state.areaKmX, state.areaKmY);
+
 function currentAreaBounds() {
   if (state.selectedRegions.length) return unionRegionBounds(state.selectedRegions);
-  return boundsFromCenter(state.center.lat, state.center.lon, state.areaKm);
+  return boxBounds();
+}
+
+/* Detail sets the grid on the longer side; the shorter side scales by the true
+   metric aspect so terrain cells stay square instead of stretching. The aspect
+   comes from the bounds, not from areaKmX/Y, so region selections work too. */
+const MIN_SAMPLES = 60;                        // mirrors the #res slider minimum
+function gridSamples(bounds, detail) {
+  const [wM, hM] = TopoTerrain.dimensions(bounds);
+  const long = Math.max(wM, hM, 1);
+  let sx = Math.round(detail * wM / long), sy = Math.round(detail * hM / long);
+  if (wM >= hM) sx = detail; else sy = detail;   // pin the long axis exactly
+  return [Math.max(MIN_SAMPLES, sx), Math.max(MIN_SAMPLES, sy)];
 }
 
 function unionRegionBounds(regions) {
@@ -409,25 +431,56 @@ function unionRegionBounds(regions) {
   return [[s, w], [n, e]];
 }
 
-/* Single write-through for the area. State, the lat/lon inputs and the slider
-   have to move together: bindSlider listens on 'input' and re-reads the DOM as
-   the source of truth, so an update that skipped $('area').value would be
-   silently undone the next time the slider is touched. */
-function setArea(lat, lon, km, skipHandle) {
+/* Every readout of the area lives here, so callers never have to remember which
+   fields exist. #areaVal carries the unit through i18n, so this also has to run
+   on a language switch — setLang calls it. */
+const AREA_INPUTS = ['area', 'areaX', 'areaY', 'lat', 'lon'];
+const kmText = v => String(Math.round(v * 100) / 100);   // 24, not "24.00"
+
+function renderAreaUI() {
+  $('area').value = areaLongKm();
+  $('areaVal').textContent = t('fmtAreaSize', { x: kmText(state.areaKmX), y: kmText(state.areaKmY) });
+  $('areaX').value = kmText(state.areaKmX);
+  $('areaY').value = kmText(state.areaKmY);
+  renderGridUI();
+}
+
+/* The grid readout depends on the AREA as well as #res, because the shorter side
+   is derived from the aspect — so both inputs have to refresh it. */
+function renderGridUI() {
+  const detail = clamp(parseInt($('res').value, 10) || 400, 60, 1000);
+  const [sx, sy] = gridSamples(currentAreaBounds(), detail);
+  $('resVal').textContent = t('fmtGrid', { x: sx, y: sy });
+}
+
+/* Clamp both axes by one factor so the SHAPE survives. setArea clamps each axis
+   on its own instead, which is what typing into a single box should do. */
+function setAreaProportional(kmX, kmY) {
+  const k = Math.min(1, 120 / Math.max(kmX, kmY, 0.25));
+  state.areaKmX = clamp(Math.round(kmX * k * 100) / 100, 0.25, 120);
+  state.areaKmY = clamp(Math.round(kmY * k * 100) / 100, 0.25, 120);
+}
+
+/* Single write-through for the area: state, the lat/lon inputs, the slider and
+   both km boxes move together. renderAreaUI() owns every readout, so no caller
+   has to remember which fields exist.
+   NB: the axes clamp INDEPENDENTLY here — typing 500 into X should cap X, not
+   squash Y. Region restore clamps proportionally instead, to keep the shape. */
+function setArea(lat, lon, kmX, kmY = kmX, skipHandle) {
   cancelActiveWork();
   if (state.selectedRegions.length) clearRegions(true);
   state.center.lat = +lat.toFixed(4);
   state.center.lon = +lon.toFixed(4);
   $('lat').value = state.center.lat;
   $('lon').value = state.center.lon;
-  state.areaKm = clamp(Math.round(km * 100) / 100, 0.25, 120);          // the slider's own domain
-  $('area').value = state.areaKm;
-  $('areaVal').textContent = state.areaKm; $('areaExact').value = state.areaKm;
+  state.areaKmX = clamp(Math.round(kmX * 100) / 100, 0.25, 120);        // the slider's own domain
+  state.areaKmY = clamp(Math.round(kmY * 100) / 100, 0.25, 120);
+  renderAreaUI();
   drawBox(skipHandle);
 }
 
 function drawBox(skipHandle) {
-  const b = boundsFromCenter(state.center.lat, state.center.lon, state.areaKm);
+  const b = boxBounds();
   if (boxRect) boxRect.setBounds(b);
   else {
     boxRect = L.rectangle(b, {
@@ -440,33 +493,52 @@ function drawBox(skipHandle) {
   placeBoxHandles(skipHandle);
 }
 
-/* NW, NE, SE, SW */
-function boxCorners() {
-  const [[s, w], [n, e]] = boundsFromCenter(state.center.lat, state.center.lon, state.areaKm);
-  return [[n, w], [n, e], [s, e], [s, w]];
+/* 0-3 corners NW,NE,SE,SW; 4-7 edge midpoints N,E,S,W. The index order is
+   load-bearing: placeBoxHandles(skip) indexes this same table, and `skip` is the
+   marker currently under the pointer. */
+const BOX_HANDLES = [
+  { at: (s, w, n, e) => [n, w], axes: 'xy', cur: 'nwse-resize', size: [12, 12] },
+  { at: (s, w, n, e) => [n, e], axes: 'xy', cur: 'nesw-resize', size: [12, 12] },
+  { at: (s, w, n, e) => [s, e], axes: 'xy', cur: 'nwse-resize', size: [12, 12] },
+  { at: (s, w, n, e) => [s, w], axes: 'xy', cur: 'nesw-resize', size: [12, 12] },
+  { at: (s, w, n, e) => [n, (w + e) / 2], axes: 'y', cur: 'ns-resize', size: [16, 8] },
+  { at: (s, w, n, e) => [(s + n) / 2, e], axes: 'x', cur: 'ew-resize', size: [8, 16] },
+  { at: (s, w, n, e) => [s, (w + e) / 2], axes: 'y', cur: 'ns-resize', size: [16, 8] },
+  { at: (s, w, n, e) => [(s + n) / 2, w], axes: 'x', cur: 'ew-resize', size: [8, 16] },
+];
+function boxHandlePoints() {
+  const [[s, w], [n, e]] = boxBounds();
+  return BOX_HANDLES.map(h => h.at(s, w, n, e));
 }
 
-const boxHandleIcon = L.divIcon({
+/* Square blocks resize both axes, rounded bars stretch one; the cursor says the
+   same thing again. iconAnchor must stay at half iconSize or handles sit askew. */
+const handleIcon = (w, h, cur, radius) => L.divIcon({
   className: '',
-  html: `<div style="width:12px;height:12px;border:2px solid #fff;background:${BOX_COLOR};` +
-        `box-shadow:0 0 3px rgba(0,0,0,.6);cursor:move"></div>`,
-  iconSize: [12, 12], iconAnchor: [6, 6],
+  html: `<div style="width:${w}px;height:${h}px;border:2px solid #fff;background:${BOX_COLOR};` +
+        `border-radius:${radius}px;box-shadow:0 0 3px rgba(0,0,0,.6);cursor:${cur}"></div>`,
+  iconSize: [w, h], iconAnchor: [w / 2, h / 2],
 });
+const BOX_ICONS = BOX_HANDLES.map(h => handleIcon(h.size[0], h.size[1], h.cur, h.axes === 'xy' ? 0 : 3));
 
 /* Built once; afterwards only repositioned. Rebuilding the layer mid-gesture
    would destroy the very marker Leaflet is dragging and the drag would die. */
 function buildBoxHandles() {
   boxHandleLayer = L.layerGroup().addTo(map);
-  boxHandleMarkers = boxCorners().map((ll, i) => {
-    const m = L.marker(ll, { icon: boxHandleIcon, draggable: true, keyboard: false });
+  boxHandleMarkers = boxHandlePoints().map((ll, i) => {
+    const m = L.marker(ll, { icon: BOX_ICONS[i], draggable: true, keyboard: false });
     m.addTo(boxHandleLayer);
     // Marker.Drag already suppresses map panning, so no map.dragging.disable().
     m.on('drag', ev => {
-      const p = ev.target.getLatLng(), c = state.center;
+      const p = ev.target.getLatLng(), c = state.center, ax = BOX_HANDLES[i].axes;
+      // dxKm is a purely longitudinal arc at the centre latitude — exactly what
+      // boundsFromCenter's 111.32*cos(lat) denominator inverts, so drag and
+      // redraw agree. Each axis moves only if this handle owns it.
       const dxKm = haversine(c.lat, c.lon, c.lat, p.lng) / 1000;
       const dyKm = haversine(c.lat, c.lon, p.lat, c.lon) / 1000;
-      // centre pinned; max() so the box always encloses the pointer
-      setArea(c.lat, c.lon, 2 * Math.max(dxKm, dyKm), i);
+      setArea(c.lat, c.lon,                                    // centre pinned
+        ax.includes('x') ? 2 * dxKm : state.areaKmX,
+        ax.includes('y') ? 2 * dyKm : state.areaKmY, i);
     });
     m.on('dragend', () => { boxDragged = true; placeBoxHandles(); });
     return m;
@@ -475,8 +547,8 @@ function buildBoxHandles() {
 
 function placeBoxHandles(skip) {
   if (!boxHandleMarkers.length) return;
-  const corners = boxCorners();
-  boxHandleMarkers.forEach((m, i) => { if (i !== skip) m.setLatLng(corners[i]); });
+  const points = boxHandlePoints();
+  boxHandleMarkers.forEach((m, i) => { if (i !== skip) m.setLatLng(points[i]); });
 }
 
 /* L.Rectangle is a Path with no built-in drag, so this gesture is hand-rolled,
@@ -504,7 +576,7 @@ function bindBoxMove() {
     const onMove = m => {
       const p = map.mouseEventToLatLng(m);
       moved = true;
-      setArea(c0.lat + (p.lat - start.lat), c0.lon + (p.lng - start.lng), state.areaKm);
+      setArea(c0.lat + (p.lat - start.lat), c0.lon + (p.lng - start.lng), state.areaKmX, state.areaKmY);
     };
     const onUp = m => {
       el.removeEventListener('pointermove', onMove);
@@ -665,9 +737,9 @@ function syncRegionAreaUI(fitMap) {
   $('lat').value = state.center.lat; $('lon').value = state.center.lon;
   const wKm = haversine(c.lat, b.getWest(), c.lat, b.getEast()) / 1000;
   const hKm = haversine(b.getSouth(), c.lng, b.getNorth(), c.lng) / 1000;
-  state.areaKm = Math.max(0.25, Math.ceil(Math.max(wKm, hKm) * 100) / 100);
-  $('areaVal').textContent = state.areaKm; $('areaExact').value = state.areaKm;
-  $('area').disabled = true; $('areaExact').disabled = true; $('lat').disabled = true; $('lon').disabled = true;
+  setAreaProportional(wKm, hKm);
+  renderAreaUI();
+  for (const id of AREA_INPUTS) $(id).disabled = true;
   setBoxVisible(false);
   if (fitMap) map.fitBounds(b.pad(0.05));
 }
@@ -728,9 +800,9 @@ function removeRegion(id, silent = false) {
 }
 
 function restoreBoxArea() {
-  state.areaKm = clamp(state.areaKm, 0.25, 120);
-  $('area').value = state.areaKm; $('areaVal').textContent = state.areaKm; $('areaExact').value = state.areaKm;
-  $('area').disabled = false; $('areaExact').disabled = false; $('lat').disabled = false; $('lon').disabled = false;
+  setAreaProportional(state.areaKmX, state.areaKmY);
+  renderAreaUI();
+  for (const id of AREA_INPUTS) $(id).disabled = false;
   drawBox(); setBoxVisible(true);
 }
 
@@ -776,6 +848,7 @@ $('regionMode').addEventListener('change', () => {
   invalidateGeneratedModels(); refreshExportLabels();
 });
 
+renderAreaUI();
 drawBox();
 buildBoxHandles();
 
@@ -824,7 +897,7 @@ async function doSearch() {
     $('lat').value = state.center.lat; $('lon').value = state.center.lon;
     const place = g.name.split(',').slice(0, 2).join(',');
     state.placeName = place;
-    drawBox(); map.setView([g.lat, g.lon], zoomForKm(state.areaKm));
+    drawBox(); map.setView([g.lat, g.lon], zoomForKm(areaLongKm()));
     setStatusKey('stFound', { place }, 'ok');
   } catch (e) { setStatus(e.message, 'err'); }
 }
@@ -832,14 +905,15 @@ $('searchBtn').addEventListener('click', doSearch);
 $('search').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 function zoomForKm(km) { return clamp(Math.round(13 - Math.log2(km / 3)), 3, 18); }
 
-/* Recenter + resize the puzzle box to cover latLng bounds; returns area km. */
+/* Recenter + resize the puzzle box to cover latLng bounds; returns [kmX, kmY]. */
 function fitAreaToBounds(b) {
   const c = b.getCenter();
   const wKm = haversine(c.lat, b.getWest(), c.lat, b.getEast()) / 1000;
   const hKm = haversine(b.getSouth(), c.lng, b.getNorth(), c.lng) / 1000;
-  setArea(c.lat, c.lng, Math.ceil(Math.max(wKm, hKm, 1) * 1.15));   // setArea clamps
+  const fitKm = km => Math.max(km * 1.15, 1);                      // setArea clamps
+  setArea(c.lat, c.lng, fitKm(wKm), fitKm(hKm));
   map.fitBounds(b.pad(0.15));
-  return state.areaKm;
+  return [state.areaKmX, state.areaKmY];
 }
 
 /* ---------- GPX track import ---------- */
@@ -878,10 +952,10 @@ $('gpxFile').addEventListener('change', async e => {
     // an imported file replaces a drawn route rather than losing to it silently
     route.pts = []; route.line = null; route.layer.clearLayers(); setDrawing(false);
     gpxLayer = L.polyline(pts, { color: '#f2a65a', weight: 3, opacity: 0.9 }).addTo(map);
-    const km = fitAreaToBounds(gpxLayer.getBounds());
+    const [kmX, kmY] = fitAreaToBounds(gpxLayer.getBounds());
     $('gpxClear').style.display = '';
     updateRouteButtons();
-    setStatusKey('stGpxLoaded', { count: pts.length, km }, 'ok');
+    setStatusKey('stGpxLoaded', { count: pts.length, x: kmText(kmX), y: kmText(kmY) }, 'ok');
   } catch (err) { setStatus(err.message, 'err'); }
   e.target.value = '';
 });
@@ -1009,8 +1083,8 @@ $('routeGps').addEventListener('click', () => {
 $('routeFit').addEventListener('click', () => {
   const pts = currentRoutePts();
   if (!pts) return;
-  const km = fitAreaToBounds(L.latLngBounds(pts));
-  setStatusKey('stAreaFit', { km }, 'ok');
+  const [kmX, kmY] = fitAreaToBounds(L.latLngBounds(pts));
+  setStatusKey('stAreaFit', { x: kmText(kmX), y: kmText(kmY) }, 'ok');
 });
 $('routeClear').addEventListener('click', () => {
   route.pts = []; route.line = null; route.layer.clearLayers();
@@ -1042,20 +1116,33 @@ function bindSlider(id, valId, fmt = (v) => v, onChange = null) {
   const update = () => { out.textContent = fmt(el.value); if (onChange) onChange(el.value); };
   el.addEventListener('input', update); update();
 }
-bindSlider('area', 'areaVal', v => v, v => {
+/* Snapshot BOTH axes when the gesture starts and scale from that, not from live
+   state: setArea rounds to 2dp, so rescaling per tick would drift the aspect by
+   up to 2% a tick on a 0.25 km side over a ~100-tick drag. */
+let areaGrab = null;
+const snapshotArea = () => { areaGrab = { x: state.areaKmX, y: state.areaKmY }; };
+$('area').addEventListener('pointerdown', snapshotArea);
+$('area').addEventListener('keydown', snapshotArea);
+$('area').addEventListener('change', () => { areaGrab = null; });
+$('area').addEventListener('input', () => {
   if (state.selectedRegions.length) return;
-  state.areaKm = +v; $('areaExact').value = v; drawBox();
+  const g = areaGrab || { x: state.areaKmX, y: state.areaKmY };
+  const k = (+$('area').value) / Math.max(g.x, g.y, 0.25);
+  setArea(state.center.lat, state.center.lon, g.x * k, g.y * k);
 });
-bindSlider('res', 'resVal', v => v, v => { $('detailPreset').value = ['200', '400', '800'].includes(v) ? v : 'custom'; });
+bindSlider('res', 'resVal', v => v, v => {
+  $('detailPreset').value = ['200', '400', '800'].includes(v) ? v : 'custom';
+  renderGridUI();
+});
 bindSlider('buildingScale', 'buildingScaleVal', v => (+v).toFixed(1));
 $('detailPreset').addEventListener('change', () => {
   if ($('detailPreset').value === 'custom') return;
   $('res').value = $('detailPreset').value; $('res').dispatchEvent(new Event('input', { bubbles: true }));
 });
-$('areaExact').addEventListener('change', () => {
-  const km = parseFloat($('areaExact').value);
-  if (Number.isFinite(km)) setArea(state.center.lat, state.center.lon, km);
-  else $('areaExact').value = state.areaKm;
+for (const id of ['areaX', 'areaY']) $(id).addEventListener('change', () => {
+  const x = parseFloat($('areaX').value), y = parseFloat($('areaY').value);
+  if (Number.isFinite(x) && Number.isFinite(y)) setArea(state.center.lat, state.center.lon, x, y);
+  else renderAreaUI();
 });
 $('terrainSource').addEventListener('change', () => { $('terrainKeyGroup').hidden = $('terrainSource').value !== 'maptiler'; });
 $('includeBuildings').addEventListener('change', () => { $('buildingScale').disabled = !$('includeBuildings').checked; });
@@ -1125,7 +1212,9 @@ const boundsKey = b => b[0][0].toFixed(7) + ',' + b[0][1].toFixed(7) + ',' +
 
 async function getTerrainSources(opts, onProgress, signal, key) {
   const { bounds, samples, terrainProvider } = opts;
-  const bKey = boundsKey(bounds), eKey = terrainProvider + '|' + bKey + '|' + samples;
+  const bKey = boundsKey(bounds);
+  const sKey = Array.isArray(samples) ? samples.join('x') : String(samples);
+  const eKey = terrainProvider + '|' + bKey + '|' + sKey;
   const c = state.net;
   let elevation = c.elevation.get(eKey);
   // Validate the selected key even if the elevation grid is already cached.
@@ -2364,7 +2453,7 @@ function setStatus(msg, cls = '') { lastStatus = null; renderStatus(msg, cls); }
 function setStatusKey(key, params, cls = '') { lastStatus = { key, params, cls }; renderStatus(t(key, params), cls); }
 function overlay(on, text) { $('overlay').style.display = on ? 'grid' : 'none'; if (text) $('overlayText').textContent = text; }
 
-const generationInputs = ['area', 'areaExact', 'lat', 'lon', 'res', 'detailPreset', 'nx', 'ny', 'vex', 'width', 'base',
+const generationInputs = ['area', 'areaX', 'areaY', 'lat', 'lon', 'res', 'detailPreset', 'nx', 'ny', 'vex', 'width', 'base',
   'terrainSource', 'terrainKey', 'includeBuildings', 'buildingScale', 'routeMode', 'routeTop', 'routeJoin', 'printShape', 'frameStyle'];
 function generationSignature() {
   // The key is deliberately excluded: its input event cancels active work.
@@ -2437,7 +2526,7 @@ async function generate() {
       routePath = routePath.filter((_, k) => k % step === 0 || k === routePath.length - 1);
     }
     const common = {
-      samples: clamp(parseInt($('res').value, 10) || 400, 60, 1000),
+      detail: clamp(parseInt($('res').value, 10) || 400, 60, 1000),
       terrainProvider: $('terrainSource').value,
       includeBuildings: $('includeBuildings').checked,
       buildingScale: parseFloat($('buildingScale').value),
@@ -2483,7 +2572,8 @@ async function generate() {
     const models = [];
     for (let i = 0; i < descriptors.length; i++) {
       const d = descriptors[i];
-      const opts = Object.assign({}, common, { bounds: d.bounds, regionPolygons: d.polygons });
+      const opts = Object.assign({}, common, { bounds: d.bounds, regionPolygons: d.polygons,
+        samples: gridSamples(d.bounds, common.detail) });
       const progress = txt => overlay(true, descriptors.length > 1
         ? t('pgRegion', { done: i + 1, total: descriptors.length, place: d.name }) + ' · ' + txt : txt);
       const model = await buildModel(opts, progress, controller.signal, key);
@@ -2733,6 +2823,7 @@ function setLang(code, persist) {
   applyI18n();                                // every data-i18n* element
 
   // text that applyI18n cannot own, because it depends on runtime state
+  renderAreaUI();
   refreshRouteBtn();
   refreshRegionButton();
   refreshRegionList();

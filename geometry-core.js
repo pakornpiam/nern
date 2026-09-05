@@ -268,11 +268,10 @@ function buildGeometry(src, opts, onStep = () => {}) {
   // --- physical scaling ---
   const boxWidthM = haversine((latN + latS) / 2, lonW, (latN + latS) / 2, lonE);
   const boxHeightM = haversine(latN, (lonW + lonE) / 2, latS, (lonW + lonE) / 2);
-  // A province can be much taller than it is wide. Keep its longest dimension
-  // within the requested print size; square/manual selections retain the exact
-  // historical width-based scaling.
-  const mmPerMeter = opts.regionPolygons && opts.regionPolygons.length
-    ? widthMM / Math.max(boxWidthM, boxHeightM) : widthMM / boxWidthM;
+  // A province, or a hand-drawn rectangle, can be much taller than it is wide.
+  // widthMM is the LONGEST side, matching its "Maximum model size" label: binding
+  // it to X alone would print a 5x20 km selection 720 mm deep.
+  const mmPerMeter = widthMM / Math.max(boxWidthM, boxHeightM, 1);
   const modelWidth = boxWidthM * mmPerMeter;
   const modelDepth = boxHeightM * mmPerMeter;
   const dx = modelWidth / W, dy = modelDepth / D;
