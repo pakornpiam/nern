@@ -176,10 +176,15 @@
 
     <div class="group">
       <h2 data-i18n="g4Title">4 · Colors (Bambu AMS)</h2>
-      <label class="row" for="waterLevel"><span data-i18n="lblWaterLevel">Water level</span> <span class="val"><span id="waterLevelVal">0.3</span> <span data-i18n="unitM">m</span></span></label>
-      <input id="waterLevel" type="number" min="-500" max="9000" step="0.1" value="0.3" />
-      <label class="band-check" style="margin-top:6px"><input id="waterFlatten" type="checkbox" /><span data-i18n="lblWaterFlatten">Flatten the water surface</span></label>
-      <div class="hint" id="hintWater">Everything at or below this height prints in the water colour, together with the lakes and rivers OpenStreetMap knows about. The surface keeps its relief — it is painted, not flattened.</div>
+      <label class="band-check"><input id="waterEnabled" type="checkbox" checked /><span data-i18n="lblWaterEnabled">Enable water layer</span></label>
+      <!-- Wrapped so renderWaterUI can hide the level, the flatten toggle and the hint
+           as one unit: with the layer off none of them mean anything. -->
+      <div id="waterOpts">
+        <label class="row" for="waterLevel" style="margin-top:6px"><span data-i18n="lblWaterLevel">Water level</span> <span class="val"><span id="waterLevelVal">0.3</span> <span data-i18n="unitM">m</span></span></label>
+        <input id="waterLevel" type="number" min="-500" max="9000" step="0.1" value="0.3" />
+        <label class="band-check" style="margin-top:6px"><input id="waterFlatten" type="checkbox" /><span data-i18n="lblWaterFlatten">Flatten the water surface</span></label>
+        <div class="hint" id="hintWater">Everything at or below this height prints in the water colour, together with the lakes and rivers OpenStreetMap knows about. The surface keeps its relief — it is painted, not flattened.</div>
+      </div>
 
       <div class="band-list" id="bandList" style="margin-top:8px">
         <div class="band-row" id="waterRow" hidden>
@@ -219,7 +224,7 @@
 
       <div class="band-actions">
         <button id="bandReset" data-i18n="btnBandReset">Reset to even</button>
-        <label class="band-check"><input id="waterAuto" type="checkbox" checked /><span data-i18n="lblWaterAuto">4 bands when there is no water</span></label>
+        <label class="band-check" id="waterAutoRow"><input id="waterAuto" type="checkbox" checked /><span data-i18n="lblWaterAuto">4 bands when there is no water</span></label>
       </div>
       <div class="hint band-note" id="bandNote"></div>
       <div class="hint" id="hintBands"></div>
@@ -1284,8 +1289,13 @@ async function getTerrainSources(opts, onProgress, signal, key) {
     if (c.elevation.size >= 4) c.elevation.delete(c.elevation.keys().next().value);
     c.elevation.set(eKey, elevation);
   }
-  let rings = c.water.get(bKey), waterFailed = false;
-  if (!rings) {
+  /* With the water layer off there is nothing to ask Overpass for. The guard has to
+     cover the cache write too: storing [] under this bKey would poison a later
+     enable, since the ring cache is keyed by bounds alone and knows nothing about
+     the toggle. Same shape as fetchBuildings({ enabled }). */
+  const wantWater = opts.waterEnabled !== false;
+  let rings = wantWater ? c.water.get(bKey) : [], waterFailed = false;
+  if (wantWater && !rings) {
     onProgress(t('pgWater'));
     try {
       rings = await fetchWaterRings(bounds, signal);
@@ -1299,8 +1309,10 @@ async function getTerrainSources(opts, onProgress, signal, key) {
   onProgress(t('pgBuildings'));
   const buildings = await TopoBuildings.fetchBuildings(bounds, { enabled: opts.includeBuildings, signal });
   const osmWater = new Uint8Array(elevation.VW * elevation.VD);
-  rasterizeWaterRings(rings, bounds, elevation.W, elevation.D, elevation.VW, elevation.VD, osmWater);
-  return { ...elevation, osmWater, buildings, waterFailed };
+  if (wantWater) rasterizeWaterRings(rings, bounds, elevation.W, elevation.D, elevation.VW, elevation.VD, osmWater);
+  // Records whether osmWater holds real data. Re-enabling water on a source built
+  // without it is the one case that genuinely needs a regenerate.
+  return { ...elevation, osmWater, buildings, waterFailed, waterFetched: wantWater };
 }
 
 async function buildModel(opts, onProgress, signal, key) {
@@ -1407,7 +1419,9 @@ function aggregateModels(models) {
     maxE: Math.max(...models.map(m => m.maxE)),
     hasWater: models.some(m => m.hasWater),
     hasOsmWater: models.some(m => m.hasOsmWater),
-    NB: models.some(m => m.hasWater) || $('waterAuto').checked === false ? 3 : 4,
+    // An explicit water-off always reuses the freed slot, so #waterAuto does not apply.
+    NB: models.every(m => m.waterOff) ? 4
+      : (models.some(m => m.hasWater) || $('waterAuto').checked === false ? 3 : 4),
   };
 }
 
@@ -1535,8 +1549,20 @@ $('bandReset').addEventListener('click', () => {
   applyBands();
 });
 
-const flattenOn = () => $('waterFlatten').checked;
-function refreshWaterHint() { $('hintWater').textContent = t(flattenOn() ? 'hintWaterFlat' : 'hintWater'); }
+const waterOn = () => $('waterEnabled').checked;
+// With the layer off there is no surface to flatten, so the build must not be told to.
+const flattenOn = () => $('waterFlatten').checked && waterOn();
+/* Owns everything downstream of the toggle: the level, the flatten checkbox and the
+   hint all describe a layer that is not there, and #waterAuto — which decides whether
+   the freed slot is reused when water is ON but the area has none — would contradict
+   an explicit off. The blue #waterRow self-hides via state.bands.waterActive. */
+function renderWaterUI() {
+  const on = waterOn();
+  $('waterOpts').hidden = !on;
+  $('waterAutoRow').hidden = !on;
+  $('hintWater').textContent = t(flattenOn() ? 'hintWaterFlat' : 'hintWater');
+}
+const refreshWaterHint = renderWaterUI;
 
 /* With flatten on the level moves geometry, not just colour, so the panel needs
    a real rebuild. Geometry runs in a worker and the sources are already fetched,
@@ -1560,7 +1586,7 @@ async function rebuildGeometryNow() {
   try {
     const models = [];
     for (const old of oldModels) {
-      const opts = { ...old.opts, waterLevelM: state.waterLevelM,
+      const opts = { ...old.opts, waterLevelM: state.waterLevelM, waterEnabled: waterOn(),
         autoFallback: $('waterAuto').checked, flattenWater: flattenOn(), ...routeDimOpts() };
       const model = await TopoWorker.run('build', { src: old.src, opts }, { signal: controller.signal,
         progress: (key, params) => overlay(true, t(key, params)) });
@@ -1606,6 +1632,32 @@ $('waterFlatten').addEventListener('change', () => {
   refreshWaterHint();
   if (state.model || $('generate').disabled) scheduleGeometryRebuild(0);
 });
+
+/* Same cheap-vs-rebuild split as onWaterSettingChange, plus one branch it does not
+   need. Turning the layer off never destroyed src.osmWater — it only told the worker
+   to ignore it — so turning it back on is just as cheap. The exception is a model
+   GENERATED with water off: that source skipped the Overpass call, so the rings are
+   genuinely absent and only a regenerate can supply them. */
+function onWaterEnabledChange() {
+  renderWaterUI();
+  const on = waterOn();
+  if (!state.models.length && !$('generate').disabled) return;
+  if (on && state.models.some(m => m.src && m.src.waterFetched === false)) {
+    setStatusKey('stWaterNeedsGenerate', null, 'warn');
+    return;
+  }
+  if ($('generate').disabled) { scheduleGeometryRebuild(0); return; }
+  if (!state.models.length) return;
+  // flatten is baked into Hv at build time, so it cannot be undone in place
+  if ($('waterFlatten').checked) { scheduleGeometryRebuild(0); return; }
+  for (const model of state.models) {
+    model.waterOff = !on;
+    applyWaterLevel(model, state.waterLevelM, $('waterAuto').checked);
+  }
+  reconcileAllModels(state.models);
+  applyBands();
+}
+$('waterEnabled').addEventListener('change', onWaterEnabledChange);
 
 /* ============================================================================
    THREE.JS PREVIEW
@@ -2603,8 +2655,9 @@ async function generate() {
       ny: clamp(parseInt($('ny').value, 10) || 1, 1, 8),
       vex: parseFloat($('vex').value),
       waterLevelM: state.waterLevelM,
+      waterEnabled: waterOn(),
       autoFallback: $('waterAuto').checked,
-      flattenWater: $('waterFlatten').checked,
+      flattenWater: flattenOn(),
       widthMM: parseFloat($('width').value),
       baseMM: parseFloat($('base').value),
       routeMode: $('routeMode').value,

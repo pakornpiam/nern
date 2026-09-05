@@ -18,7 +18,12 @@ async function installFixture(page, opts = {}) {
     window.fixtureSrc = src;
     getTerrainSources = async (input, progress, signal) => {
       if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
-      return { ...src, buildings: input.includeBuildings ? src.buildings : { features: [], status: 'off' } };
+      // Mirror the real one: with the water layer off no rings are fetched, so the
+      // source carries an empty mask and records that it has no water data.
+      const wantWater = input.waterEnabled !== false;
+      return { ...src, waterFetched: wantWater,
+        osmWater: wantWater ? src.osmWater : new Uint8Array(src.osmWater.length),
+        buildings: input.includeBuildings ? src.buildings : { features: [], status: 'off' } };
     };
     $('nx').value = opts.nx || 1;
   }, { src: serial, opts });
@@ -376,5 +381,83 @@ test('the Bambu export delivers terrain and route in a single download', async (
   const text = bytes.toString('latin1');
   expect(text).toContain('topopuzzle_bambu_4color.3mf');
   expect(text).toContain('topopuzzle_bambu_route.3mf');
+  expect(errors).toEqual([]);
+});
+
+test('disabling the water layer hands its slot to a fourth adjustable band', async ({ page }) => {
+  const errors = await setup(page);
+  await installFixture(page, { water: true });
+  // Count source fetches: turning the layer off must restamp from the cached source.
+  await page.evaluate(() => {
+    const original = getTerrainSources;
+    window.srcCalls = 0;
+    getTerrainSources = async (...args) => { window.srcCalls++; return original(...args); };
+  });
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  await expect(page.locator('#waterRow')).toBeVisible();
+  expect(await page.evaluate(() => [state.bands.nb, state.model.hasWater])).toEqual([3, true]);
+  // Band 1 is the blue slot's understudy: hidden while water holds the slot.
+  await expect(page.locator('#bandRow0')).toBeHidden();
+
+  await page.locator('#waterEnabled').uncheck();
+  await expect.poll(() => page.evaluate(() => state.bands.nb)).toBe(4);
+  // Everything that only describes water is gone...
+  await expect(page.locator('#waterOpts')).toBeHidden();
+  await expect(page.locator('#waterAutoRow')).toBeHidden();
+  await expect(page.locator('#waterRow')).toBeHidden();
+  // ...and the freed slot is a normal band: own colour, own editable altitude.
+  await expect(page.locator('#bandRow0')).toBeVisible();
+  await expect(page.locator('#col0')).toBeVisible();
+  await expect(page.locator('#cut0')).toBeVisible();
+  expect(await page.evaluate(() => state.model.hasWater)).toBe(false);
+  // The legend drops its fixed 14% blue slice and splits four ways instead.
+  const gradient = await page.evaluate(() => $('legend').style.background);
+  expect(gradient).not.toContain('rgb(59, 123, 212)');   // #3b7bd4, the water colour
+  expect(await page.evaluate(() => state.bands.cutsM.length)).toBe(3);
+  // Restamped in place — no tile or Overpass round-trip.
+  expect(await page.evaluate(() => window.srcCalls)).toBe(1);
+
+  // The altitude really is adjustable, and editing it recolours without a rebuild.
+  await page.locator('#cut0').fill('11.5');
+  await page.locator('#cut0').dispatchEvent('change');
+  expect(await page.evaluate(() => state.bands.cutsM[0])).toBeCloseTo(11.5, 5);
+  expect(await page.evaluate(() => state.model.zCuts.length)).toBe(3);
+  expect(await page.evaluate(() => window.srcCalls)).toBe(1);
+
+  // Turning it back on is equally cheap: the source still carries its OSM mask.
+  await page.locator('#waterEnabled').check();
+  await expect.poll(() => page.evaluate(() => state.bands.nb)).toBe(3);
+  await expect(page.locator('#waterRow')).toBeVisible();
+  await expect(page.locator('#waterOpts')).toBeVisible();
+  expect(await page.evaluate(() => window.srcCalls)).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test('re-enabling water on a model generated without it asks for a regenerate', async ({ page }) => {
+  // Generating with the layer off skips the Overpass call entirely, so that source
+  // has no rings to fall back on. This is the one direction the cheap path cannot
+  // serve, and it has to say so rather than appear to do nothing.
+  const errors = await setup(page);
+  await installFixture(page, { water: true });
+  await page.locator('#waterEnabled').uncheck();
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  expect(await page.evaluate(() => state.model.src.waterFetched)).toBe(false);
+  expect(await page.evaluate(() => state.model.grid.osmWater.some(v => v === 1))).toBe(false);
+  expect(await page.evaluate(() => state.bands.nb)).toBe(4);
+
+  await page.locator('#waterEnabled').check();
+  await expect(page.locator('#status')).toHaveClass('warn');
+  await expect(page.locator('#status')).toContainText('Press Generate');
+  // The stale model is left alone rather than half-updated.
+  expect(await page.evaluate(() => [state.bands.nb, state.model.hasWater])).toEqual([4, false]);
+
+  // Generating now fetches the water and the blue slot comes back.
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  expect(await page.evaluate(() => state.model.src.waterFetched)).toBe(true);
+  expect(await page.evaluate(() => [state.bands.nb, state.model.hasWater])).toEqual([3, true]);
+  await expect(page.locator('#waterRow')).toBeVisible();
   expect(errors).toEqual([]);
 });
