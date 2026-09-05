@@ -56,6 +56,33 @@ ratio the short side reaches the 60-sample floor and cells stop being square.
 prints 180 × 45 mm rather than overrunning the plate. Circle and hex print shapes
 inscribe themselves in the rectangle, so a circle becomes an ellipse.
 
+## Route dimensions
+
+**Route width**, **Groove depth** / **Ridge height**, and — for the full-depth route —
+**Fit clearance** size the route stamp in millimetres of print, independent of the
+mode. Width runs 0.6–12 mm, depth 0.2–3 mm, and clearance 0–0.8 mm per side; values
+outside those bounds are clamped by the geometry, not just the sliders. The defaults
+(3.2 mm wide, 1.2 mm deep, 0.2 mm clearance) are what the modes used to hardcode.
+
+The sliders carry one shared value across modes rather than a per-mode default, so a
+route keeps its size when you switch between inlay, emboss, engrave, and full depth.
+Depth is a magnitude: emboss raises the ridge by it, engrave and inlay cut down by it.
+Full-depth routes reach the print bottom by definition, so depth is disabled there and
+clearance takes over — the channel is the route width plus twice the clearance, which
+is the assembly play, and worth tuning to your printer.
+
+The route is stamped by testing the elevation grid's vertices, so a route thinner than
+the vertex spacing has nothing to land on. Rather than dropping it — which cost the print
+its route part and its route file with no warning — the width is raised to what the grid
+can carry and the status line reports both numbers. Raise **Detail** for a genuinely
+thinner route: at detail 400 on a 180 mm print, vertices sit 0.45 mm apart and anything
+down to about 0.64 mm survives untouched.
+
+Changing a dimension restamps the preview from the cached elevation data, with no new
+tile or Overpass request, so dragging a slider is cheap. Building footprints and the
+banded 3MF and water solids all follow the width, so a widened route stays open and
+its exports stay watertight.
+
 ## Export names
 
 Downloads take the name of the place you searched, so `Chiang Mai` yields
@@ -64,6 +91,11 @@ and route counterparts. Selected regions name themselves, and an archive holding
 several regions joins theirs. Typing new coordinates clears the name and falls
 back to `topopuzzle`; dragging or resizing the box keeps it, since that refines
 the same place. A model keeps the name it was generated for until it is rebuilt.
+
+A Bambu export that carries a route arrives as a single `_bambu.zip` holding the
+4-colour terrain and the red route part. It has to be one download: a browser grants
+a page one programmatic download and puts the next behind a permission that defaults
+to ask, so the second file used to disappear without an error.
 
 ## Development and validation
 

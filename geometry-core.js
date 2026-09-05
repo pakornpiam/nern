@@ -9,11 +9,38 @@ const WATER_CAP_MM = 0.8; // thickness of the blue water skin in the 3MF
 
 const CLIP_EPS = 1e-7;
 
-const THROUGH_ROUTE_RAISE = 0.6;
+const THROUGH_ROUTE_RAISE = 0.6; // routeTop:'raised' lift, a finish choice, not a dimension
 
-const THROUGH_CHANNEL_HALF = 1.8;
+// Route dimension defaults (mm): full width, groove depth / ridge height, and the
+// through-route's per-side assembly clearance. These are the numbers the fixed
+// THROUGH_ROUTE_HALF/THROUGH_CHANNEL_HALF constants carried, so a route left at the
+// slider defaults prints exactly as it always did.
+const ROUTE_W = 3.2, ROUTE_D = 1.2, ROUTE_C = 0.2;
 
-const THROUGH_ROUTE_HALF = 1.6;
+/* Resolved once per build, then carried on model.grid: buildBandSolidMesh and
+   buildWaterCapMesh re-cut the same channel for the banded and water-skin exports
+   but only ever receive `model`, and fuseCity needs the shallow half-width to keep
+   buildings off the route. All of them must agree with the terrain that was cut.
+   The fields are optional on purpose — the worker takes arbitrary opts, and the
+   fixture options() in the tests passes none of them. */
+function resolveRouteDims(opts = {}, cellDiagonal = 0) {
+  const n = (v, d) => (Number.isFinite(+v) ? +v : d);
+  const width = clamp(n(opts.routeWidthMM, ROUTE_W), 0.6, 12);
+  /* The route is only ever tested at grid VERTICES, so one thinner than the vertex
+     spacing can pass cleanly between two columns and touch nothing: no groove, no
+     insert, no route part, and no warning either, since its coordinates are inside
+     the area. Floor the stamp at what the grid can actually carry. Half the cell
+     diagonal is the worst case over every route orientation. */
+  const asked = width / 2;
+  const halfW = Math.max(asked, cellDiagonal / 2);
+  return {
+    halfW,                                                // shallow stamp + through route
+    askedHalfW: asked,                                    // caller reports the difference
+    depth: clamp(n(opts.routeDepthMM, ROUTE_D), 0.2, 3),  // magnitude; the mode picks the sign
+    channelHalf: halfW + clamp(n(opts.routeClearMM, ROUTE_C), 0, 0.8)
+  };
+}
+const DEFAULT_CHANNEL_HALF = ROUTE_W / 2 + ROUTE_C; // fallback for models built before route dims
 
 function pointInRing(lon, lat, ring) {
   let inside = false;
@@ -316,6 +343,7 @@ function buildGeometry(src, opts, onStep = () => {}) {
 
   // --- stamp shallow modes, or build a distance field for the through-route ---
   const throughRoute = opts.routeMode === 'through';
+  const routeDims = resolveRouteDims(opts, Math.hypot(dx, dy));
   let rd = null;        // shallow inlay: per-vertex groove depth (m)
   let routeDist = null; // through route: distance to route centerline (model mm)
   if (opts.routePath && opts.routePath.length > 1 && opts.routeMode !== 'off') {
@@ -324,8 +352,9 @@ function buildGeometry(src, opts, onStep = () => {}) {
     const inlay = opts.routeMode === 'inlay';
     if (inlay) rd = new Float32Array(VW * VD);
     if (throughRoute) routeDist = new Float32Array(VW * VD);
-    const halfW = inlay ? 1.6 : 0.9;                          // shallow-mode half-width (mm)
-    const dMM = inlay ? -1.2 : opts.routeMode === 'engrave' ? -0.8 : 1.0; // depth/height (mm)
+    const halfW = routeDims.halfW;                            // shallow-mode half-width (mm)
+    // emboss stands proud, inlay and engrave cut in; the slider carries the magnitude
+    const dMM = (opts.routeMode === 'emboss' ? 1 : -1) * routeDims.depth;
     // route lat/lon → model mm (same mapping as vertex X/Y below)
     const seg = opts.routePath.map(([la, lo]) => [
       (lo - lonW) / (lonE - lonW) * modelWidth,
@@ -407,13 +436,13 @@ function buildGeometry(src, opts, onStep = () => {}) {
         const v01 = { x: x0, y: y1, z: h01, d: routeDist[(j + 1) * VW + i] };
         const bottom = () => 0;
         // Actual CCW top triangles; retain only terrain outside the channel.
-        addClippedPrismTriangle(P, [v00, v11, v10], THROUGH_CHANNEL_HALF, false, bottom);
-        addClippedPrismTriangle(P, [v00, v01, v11], THROUGH_CHANNEL_HALF, false, bottom);
+        addClippedPrismTriangle(P, [v00, v11, v10], routeDims.channelHalf, false, bottom);
+        addClippedPrismTriangle(P, [v00, v01, v11], routeDims.channelHalf, false, bottom);
         // Cell perimeter in CCW order, with the cell interior on the left.
-        if (!inPiece(i - 1, j, p)) addClippedBoundaryWall(P, v00, v01, THROUGH_CHANNEL_HALF, false, bottom);
-        if (!inPiece(i, j + 1, p)) addClippedBoundaryWall(P, v01, v11, THROUGH_CHANNEL_HALF, false, bottom);
-        if (!inPiece(i + 1, j, p)) addClippedBoundaryWall(P, v11, v10, THROUGH_CHANNEL_HALF, false, bottom);
-        if (!inPiece(i, j - 1, p)) addClippedBoundaryWall(P, v10, v00, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inPiece(i - 1, j, p)) addClippedBoundaryWall(P, v00, v01, routeDims.channelHalf, false, bottom);
+        if (!inPiece(i, j + 1, p)) addClippedBoundaryWall(P, v01, v11, routeDims.channelHalf, false, bottom);
+        if (!inPiece(i + 1, j, p)) addClippedBoundaryWall(P, v11, v10, routeDims.channelHalf, false, bottom);
+        if (!inPiece(i, j - 1, p)) addClippedBoundaryWall(P, v10, v00, routeDims.channelHalf, false, bottom);
       } else {
         // TOP surface (two tris, normals up)
         tri(P, x0, y0, h00, x1, y0, h10, x1, y1, h11);
@@ -515,12 +544,12 @@ function buildGeometry(src, opts, onStep = () => {}) {
         const v11 = { x: x1, y: y1, z: zOf(H(i + 1, j + 1)) + raise, d: routeDist[(j + 1) * VW + i + 1] };
         const v01 = { x: x0, y: y1, z: zOf(H(i, j + 1)) + raise, d: routeDist[(j + 1) * VW + i] };
         const bottom = () => 0;
-        addClippedPrismTriangle(R, [v00, v11, v10], THROUGH_ROUTE_HALF, true, bottom);
-        addClippedPrismTriangle(R, [v00, v01, v11], THROUGH_ROUTE_HALF, true, bottom);
-        if (!sameRoutePart(i - 1, j, p)) addClippedBoundaryWall(R, v00, v01, THROUGH_ROUTE_HALF, true, bottom);
-        if (!sameRoutePart(i, j + 1, p)) addClippedBoundaryWall(R, v01, v11, THROUGH_ROUTE_HALF, true, bottom);
-        if (!sameRoutePart(i + 1, j, p)) addClippedBoundaryWall(R, v11, v10, THROUGH_ROUTE_HALF, true, bottom);
-        if (!sameRoutePart(i, j - 1, p)) addClippedBoundaryWall(R, v10, v00, THROUGH_ROUTE_HALF, true, bottom);
+        addClippedPrismTriangle(R, [v00, v11, v10], routeDims.halfW, true, bottom);
+        addClippedPrismTriangle(R, [v00, v01, v11], routeDims.halfW, true, bottom);
+        if (!sameRoutePart(i - 1, j, p)) addClippedBoundaryWall(R, v00, v01, routeDims.halfW, true, bottom);
+        if (!sameRoutePart(i, j + 1, p)) addClippedBoundaryWall(R, v01, v11, routeDims.halfW, true, bottom);
+        if (!sameRoutePart(i + 1, j, p)) addClippedBoundaryWall(R, v11, v10, routeDims.halfW, true, bottom);
+        if (!sameRoutePart(i, j - 1, p)) addClippedBoundaryWall(R, v10, v00, routeDims.halfW, true, bottom);
       }
     }
     routeParts = [...parts.values()].filter(R => R.pos.length);
@@ -542,13 +571,19 @@ function buildGeometry(src, opts, onStep = () => {}) {
     pieces, routeParts, nx, ny, W, D, minE, maxE, triCount, src, opts,
     flatWater: !!opts.flattenWater,
     routeMode: opts.routeMode, routeTop: opts.routeTop || 'flush', routeJoin: opts.routeJoin || 'piece',
+    // What the grid could carry, and what was asked for — equal unless the route was
+    // too thin to survive sampling at this detail.
+    routeStampedWidthMM: routeDims.halfW * 2, routeAskedWidthMM: routeDims.askedHalfW * 2,
     modelWidth, modelDepth,
     pieceW: modelWidth / nx, pieceH: modelDepth / ny,
     zoom: src.zoom,
     maxZ,
     // filled in by applyWaterLevel + syncBandsToModel below
     hasWater: false, NB: 4, landMin: minE, waterLevelM: 0, bandCutsM: [], zCuts: [],
-    grid: { Hv, piece, water, osmWater, cellShape, routeDist, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
+    // routeHalf/channelHalf ride along with routeDist because the band and
+    // water-cap mesh builders re-cut this channel from `model` alone.
+    grid: { Hv, piece, water, osmWater, cellShape, routeDist, routeHalf: routeDims.halfW,
+      channelHalf: routeDims.channelHalf, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
   };
   // Flood to the requested level now that the emboss (if any) has settled the heights.
   applyWaterLevel(model, opts.waterLevelM, opts.autoFallback);
@@ -765,6 +800,7 @@ function splitVerticalTJunctions(pos) {
 
 function buildBandSolidMesh(model, pieceId, band) {
   const { Hv, piece, water, cellShape, routeDist, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
+  const channelHalf = model.grid.channelHalf ?? DEFAULT_CHANNEL_HALF;
   const minE = model.minE;
   const zOf = e => baseMM + (e - minE) * zScale;
   const cLo = band === 0 ? 0 : model.zCuts[band - 1];
@@ -813,20 +849,20 @@ function buildBandSolidMesh(model, pieceId, band) {
         const v11 = { x: x1, y: y1, z: t11, d: routeDist[(j + 1) * VW + i + 1] };
         const v01 = { x: x0, y: y1, z: t01, d: routeDist[(j + 1) * VW + i] };
         const bottom = () => zb;
-        addClippedPrismTriangle(mesh, [v00, v11, v10], THROUGH_CHANNEL_HALF, false, bottom);
-        addClippedPrismTriangle(mesh, [v00, v01, v11], THROUGH_CHANNEL_HALF, false, bottom);
+        addClippedPrismTriangle(mesh, [v00, v11, v10], channelHalf, false, bottom);
+        addClippedPrismTriangle(mesh, [v00, v01, v11], channelHalf, false, bottom);
         // step walls carry the neighbour's top as their floor; lerpClipVertex
         // propagates `bottom`, so the clipped channel edge follows the step
         const stepWall = (a, b, ci, cj, za, zbb) => addClippedBoundaryWall(
           mesh, Object.assign({}, a, { bottom: za }), Object.assign({}, b, { bottom: zbb }),
-          THROUGH_CHANNEL_HALF, false, v => v.bottom);
-        if (!inc(i - 1, j)) addClippedBoundaryWall(mesh, v00, v01, THROUGH_CHANNEL_HALF, false, bottom);
+          channelHalf, false, v => v.bottom);
+        if (!inc(i - 1, j)) addClippedBoundaryWall(mesh, v00, v01, channelHalf, false, bottom);
         else if (step(i - 1, j)) stepWall(v00, v01, i - 1, j, topV(i, j, i - 1, j), topV(i, j + 1, i - 1, j));
-        if (!inc(i, j + 1)) addClippedBoundaryWall(mesh, v01, v11, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i, j + 1)) addClippedBoundaryWall(mesh, v01, v11, channelHalf, false, bottom);
         else if (step(i, j + 1)) stepWall(v01, v11, i, j + 1, topV(i, j + 1, i, j + 1), topV(i + 1, j + 1, i, j + 1));
-        if (!inc(i + 1, j)) addClippedBoundaryWall(mesh, v11, v10, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i + 1, j)) addClippedBoundaryWall(mesh, v11, v10, channelHalf, false, bottom);
         else if (step(i + 1, j)) stepWall(v11, v10, i + 1, j, topV(i + 1, j + 1, i + 1, j), topV(i + 1, j, i + 1, j));
-        if (!inc(i, j - 1)) addClippedBoundaryWall(mesh, v10, v00, THROUGH_CHANNEL_HALF, false, bottom);
+        if (!inc(i, j - 1)) addClippedBoundaryWall(mesh, v10, v00, channelHalf, false, bottom);
         else if (step(i, j - 1)) stepWall(v10, v00, i, j - 1, topV(i + 1, j, i, j - 1), topV(i, j, i, j - 1));
       } else {
         // top
@@ -881,6 +917,7 @@ function buildBandSolidMesh(model, pieceId, band) {
    vertical rim — what a genuinely flat surface needs. */
 function buildWaterCapMesh(model, pieceId) {
   const { Hv, piece, water, cellShape, routeDist, W, D, VW, dx, dy, baseMM, zScale, modelDepth } = model.grid;
+  const channelHalf = model.grid.channelHalf ?? DEFAULT_CHANNEL_HALF;
   const zOf = e => baseMM + (e - model.minE) * zScale;
   const X = i => i * dx, Y = j => modelDepth - j * dy;
   const cap = model.grid.capCell;
@@ -912,12 +949,12 @@ function buildWaterCapMesh(model, pieceId) {
         const v11 = { x: x1, y: y1, z: t11, bottom: b11, d: routeDist[(j + 1) * VW + i + 1] };
         const v01 = { x: x0, y: y1, z: t01, bottom: b01, d: routeDist[(j + 1) * VW + i] };
         const bottom = v => v.bottom;
-        addClippedPrismTriangle(mesh, [v00, v11, v10], THROUGH_CHANNEL_HALF, false, bottom);
-        addClippedPrismTriangle(mesh, [v00, v01, v11], THROUGH_CHANNEL_HALF, false, bottom);
-        if (!inc(i - 1, j)) addClippedBoundaryWall(mesh, v00, v01, THROUGH_CHANNEL_HALF, false, bottom);
-        if (!inc(i, j + 1)) addClippedBoundaryWall(mesh, v01, v11, THROUGH_CHANNEL_HALF, false, bottom);
-        if (!inc(i + 1, j)) addClippedBoundaryWall(mesh, v11, v10, THROUGH_CHANNEL_HALF, false, bottom);
-        if (!inc(i, j - 1)) addClippedBoundaryWall(mesh, v10, v00, THROUGH_CHANNEL_HALF, false, bottom);
+        addClippedPrismTriangle(mesh, [v00, v11, v10], channelHalf, false, bottom);
+        addClippedPrismTriangle(mesh, [v00, v01, v11], channelHalf, false, bottom);
+        if (!inc(i - 1, j)) addClippedBoundaryWall(mesh, v00, v01, channelHalf, false, bottom);
+        if (!inc(i, j + 1)) addClippedBoundaryWall(mesh, v01, v11, channelHalf, false, bottom);
+        if (!inc(i + 1, j)) addClippedBoundaryWall(mesh, v11, v10, channelHalf, false, bottom);
+        if (!inc(i, j - 1)) addClippedBoundaryWall(mesh, v10, v00, channelHalf, false, bottom);
       } else {
         // top
         push(x0, y0, t00, x1, y0, t10, x1, y1, t11);
@@ -947,5 +984,5 @@ function buildWaterCapMesh(model, pieceId) {
   }
   return pos;
 }
-root.TopoGeometry = { pointInRing, pointInRegion, haversine, rasterizeWaterRings, shapeInsideFn, buildPartition, meshTri, lerpClipVertex, clipScalarPolygon, clipScalarSegment, addVerticalWall, addClippedPrismTriangle, addClippedBoundaryWall, buildGeometry, labelBodies, bodyMedians, flattenWaterHeights, buildCapCellMask, landMinOf, applyWaterLevel, splitVerticalTJunctions, buildBandSolidMesh, buildWaterCapMesh };
+root.TopoGeometry = { resolveRouteDims, pointInRing, pointInRegion, haversine, rasterizeWaterRings, shapeInsideFn, buildPartition, meshTri, lerpClipVertex, clipScalarPolygon, clipScalarSegment, addVerticalWall, addClippedPrismTriangle, addClippedBoundaryWall, buildGeometry, labelBodies, bodyMedians, flattenWaterHeights, buildCapCellMask, landMinOf, applyWaterLevel, splitVerticalTJunctions, buildBandSolidMesh, buildWaterCapMesh };
 })(globalThis);

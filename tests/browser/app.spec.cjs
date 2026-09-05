@@ -251,3 +251,130 @@ test('an edge handle stretches one axis and a corner moves both', async ({ page 
   expect(afterCorner[1]).toBeGreaterThan(beforeCorner[1]);
   expect(errors).toEqual([]);
 });
+
+test('route dimension sliders restamp the model from the cached source', async ({ page }) => {
+  const errors = await setup(page);
+  // 100 samples across a 180 mm model keeps vertices 1.8 mm apart, so the grid floor
+  // lands at 1.27 mm — under the 1.6 mm half-width below, which therefore stands.
+  await installFixture(page, { samples: 100 });
+  // The fixture source spans [[0,0],[0.002,0.002]]; sit the area and route on it so
+  // the post-generate "route outside the area" check stays quiet.
+  await page.evaluate(() => {
+    setArea(0.001, 0.001, 0.2, 0.2);
+    route.pts = [[0.0002, 0.001], [0.0018, 0.001]];
+    redrawRoute();
+  });
+  await page.selectOption('#routeMode', 'through');
+  await expect(page.locator('#throughRouteOpts')).toBeVisible();
+  // A full-depth route reaches the bottom, so depth is meaningless there.
+  await expect(page.locator('#routeDepth')).toBeDisabled();
+  // The hint interpolates the live numbers instead of quoting fixed ones.
+  await expect(page.locator('#routeHint')).toContainText('3.2 mm route');
+  await expect(page.locator('#routeHint')).toContainText('3.6 mm wide');
+
+  // Count source fetches: the whole point of the rebuild path is that there are none.
+  await page.evaluate(() => {
+    const original = getTerrainSources;
+    window.srcCalls = 0;
+    getTerrainSources = async (...args) => { window.srcCalls++; return original(...args); };
+  });
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  expect(await page.evaluate(() => window.srcCalls)).toBe(1);
+  expect(await page.evaluate(() => state.model.grid.routeHalf)).toBe(1.6);
+
+  await page.locator('#routeWidth').fill('8');
+  await page.locator('#routeWidth').dispatchEvent('input');
+  await expect(page.locator('#routeWidthVal')).toHaveText('8.0');
+  await expect.poll(() => page.evaluate(() => !rebuildController && state.model.grid.routeHalf), { timeout: 20000 }).toBe(4);
+  // Restamped from old.src — no tile or Overpass round-trip.
+  expect(await page.evaluate(() => window.srcCalls)).toBe(1);
+  await expect(page.locator('#routeHint')).toContainText('8.0 mm route');
+
+  await page.locator('#routeClearance').fill('0.5');
+  await page.locator('#routeClearance').dispatchEvent('input');
+  await expect.poll(() => page.evaluate(() => !rebuildController && state.model.grid.channelHalf), { timeout: 20000 }).toBe(4.5);
+  await expect(page.locator('#routeHint')).toContainText('9.0 mm wide');
+  expect(await page.evaluate(() => window.srcCalls)).toBe(1);
+
+  // The depth label names what the mode actually does, in either language.
+  await page.selectOption('#routeMode', 'emboss');
+  await expect(page.locator('#routeDepth')).toBeEnabled();
+  await expect(page.locator('#routeDepthLbl')).toHaveText('Ridge height');
+  await page.selectOption('#routeMode', 'engrave');
+  await expect(page.locator('#routeDepthLbl')).toHaveText('Groove depth');
+  await page.selectOption('#routeMode', 'off');
+  await expect(page.locator('#routeWidth')).toBeDisabled();
+  await page.click('#langTh');
+  await expect(page.locator('#routeDepthLbl')).toHaveText('ความลึกร่อง');
+  await page.click('#langEn');
+  expect(errors).toEqual([]);
+});
+
+test('a route too thin for the grid still reaches the print, and says so', async ({ page }) => {
+  const errors = await setup(page);
+  await installFixture(page, { samples: 60 });
+  // 60 samples across a 180 mm model puts vertices every 3 mm. Run the route at
+  // x = 91.5 mm, exactly between two columns, where it used to touch no vertex at
+  // all and vanish: no route part, no route file, and no warning either, because
+  // its coordinates are inside the area.
+  await page.evaluate(() => {
+    setArea(0.001, 0.001, 0.2, 0.2);
+    const lon = 91.5 * 0.002 / 180;
+    route.pts = [[0.0002, lon], [0.0018, lon]];
+    redrawRoute();
+  });
+  await page.locator('#routeWidth').fill('1.2');
+  await page.locator('#routeWidth').dispatchEvent('change');
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+
+  // The print keeps its route part, and the export keeps its route file.
+  expect(await page.evaluate(() => state.model.routeParts?.length)).toBe(1);
+  const files = await page.evaluate(() => {
+    const zip = new JSZip(); addModelStls(zip, state.model);
+    return Object.keys(zip.files).filter(n => n.includes('route'));
+  });
+  expect(files).toEqual(['route_red_r1_c1.stl']);
+  // The slider is not what was cut, so the status says which number won.
+  await expect(page.locator('#status')).toHaveClass('warn');
+  await expect(page.locator('#status')).toContainText('1.2 mm route');
+  await expect(page.locator('#status')).toContainText('widened to 4.2 mm');
+  expect(errors).toEqual([]);
+});
+
+test('the Bambu export delivers terrain and route in a single download', async ({ page }) => {
+  /* Chrome allows a page ONE programmatic download and gates any further one behind
+     the "Automatic downloads" permission, which defaults to ask. This export builds
+     its blobs over seconds of CSG, so the gesture is long expired by the time any
+     a.click() fires — a second download was silently dropped and the route file
+     never arrived. The invariant is therefore one download, carrying both parts. */
+  const errors = await setup(page);
+  await installFixture(page, { samples: 100, water: true });
+  const downloads = [];
+  page.on('download', d => downloads.push(d));
+  await page.evaluate(() => {
+    setArea(0.001, 0.001, 0.2, 0.2);
+    route.pts = [[0.0002, 0.001], [0.0018, 0.001]];
+    redrawRoute();
+    try { localStorage.setItem('tp_lead', '1'); } catch (e) { /* private mode */ }
+  });
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  expect(await page.evaluate(() => !!state.model.routeParts?.length)).toBe(true);
+
+  await page.click('#exportBambu');
+  await expect(page.locator('#generate')).toBeEnabled({ timeout: 30000 });
+  await expect(page.locator('#status')).toContainText('topopuzzle_bambu.zip');
+  expect(downloads.map(d => d.suggestedFilename())).toEqual(['topopuzzle_bambu.zip']);
+  const [download] = downloads;
+
+  // Both parts are really in the archive the browser received. Zip stores entry names
+  // uncompressed in each local file header, so the raw bytes are proof enough.
+  const bytes = require('fs').readFileSync(await download.path());
+  expect(bytes.subarray(0, 2).toString('latin1')).toBe('PK');
+  const text = bytes.toString('latin1');
+  expect(text).toContain('topopuzzle_bambu_4color.3mf');
+  expect(text).toContain('topopuzzle_bambu_route.3mf');
+  expect(errors).toEqual([]);
+});
