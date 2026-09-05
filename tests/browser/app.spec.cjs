@@ -145,7 +145,8 @@ test('separate regions include buildings in every exported model and download wo
   // Exercise the download handlers directly without submitting a test lead.
   const download = page.waitForEvent('download');
   await page.evaluate(() => exportZip());
-  expect((await download).suggestedFilename()).toBe('topopuzzle_regions_pieces.zip');
+  // Exports are named after the regions they contain, not a fixed product name.
+  expect((await download).suggestedFilename()).toBe('district_1_district_2_pieces.zip');
   const result = await page.evaluate(async () => {
     const maxes = [];
     for (const model of state.models) {
@@ -177,4 +178,30 @@ test('building lookup outcomes remain visible and camera fits a narrow preview',
     return true;
   });
   expect(fits).toBe(true); expect(errors).toEqual([]);
+});
+
+test('exports carry the searched place name and drop it when the centre moves', async ({ page }) => {
+  const errors = await setup(page);
+  await page.route(/nominatim\.openstreetmap\.org\/search/, route => route.fulfill({
+    json: [{ lat: '18.7883', lon: '98.9853', display_name: 'Chiang Mai, Chiang Mai Province, Thailand' }],
+  }));
+  await page.fill('#search', 'Chiang Mai');
+  await page.click('#searchBtn');
+  await expect(page.locator('#status')).toContainText('Found: Chiang Mai');
+  await installFixture(page);
+  await page.click('#generate'); await expect(page.locator('#exportOne')).toBeEnabled();
+  // Exercise the download handler directly without submitting a test lead.
+  const stl = page.waitForEvent('download');
+  await page.evaluate(() => exportOne());
+  expect((await stl).suggestedFilename()).toBe('chiang_mai_chiang_mai_province_combined.stl');
+  // A route can be saved before any model exists, so it names itself.
+  const gpx = page.waitForEvent('download');
+  await page.evaluate(() => { route.pts = [[18.78, 98.98], [18.79, 98.99]]; $('routeSave').click(); });
+  expect((await gpx).suggestedFilename()).toBe('chiang_mai_chiang_mai_province_route.gpx');
+  // Typed coordinates are a move elsewhere, so the name goes stale.
+  await page.evaluate(() => { $('lat').value = '10'; $('lat').dispatchEvent(new Event('change')); });
+  expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
+  // The built model keeps the place it was generated for until it is replaced.
+  expect(await page.evaluate(() => exportPrefix())).toBe('chiang_mai_chiang_mai_province');
+  expect(errors).toEqual([]);
 });

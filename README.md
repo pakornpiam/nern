@@ -39,6 +39,15 @@ Terrain and city data remain limited by source coverage. Tiny buildings at large
 geographic scales may be too small for a particular printer; use a neighborhood
 selection and suitable slicer settings to make their dimensions visible.
 
+## Export names
+
+Downloads take the name of the place you searched, so `Chiang Mai` yields
+`chiang_mai_chiang_mai_province_combined.stl` alongside its pieces, Bambu, frame,
+and route counterparts. Selected regions name themselves, and an archive holding
+several regions joins theirs. Typing new coordinates clears the name and falls
+back to `topopuzzle`; dragging or resizing the box keeps it, since that refines
+the same place. A model keeps the name it was generated for until it is rebuilt.
+
 ## Development and validation
 
 ```sh

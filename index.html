@@ -333,6 +333,7 @@ function cancelActiveWork() {
 const state = {
   center: { lat: 35.3606, lon: 138.7274 }, // Mt Fuji
   areaKm: 24,
+  placeName: '',   // last searched place; names the export files, '' → "topopuzzle"
   selectedRegions: [],
   regionOutputMode: 'combined',
   regionPicking: false,
@@ -797,6 +798,7 @@ function syncCenterFromInputs() {
   const la = parseFloat($('lat').value), lo = parseFloat($('lon').value);
   if (Number.isFinite(la) && Number.isFinite(lo)) {
     if (state.selectedRegions.length) return;
+    state.placeName = '';
     state.center.lat = la; state.center.lon = lo; drawBox();
     map.panTo([la, lo]);
   }
@@ -820,8 +822,10 @@ async function doSearch() {
     state.center.lat = +g.lat.toFixed(4);
     state.center.lon = +g.lon.toFixed(4);
     $('lat').value = state.center.lat; $('lon').value = state.center.lon;
+    const place = g.name.split(',').slice(0, 2).join(',');
+    state.placeName = place;
     drawBox(); map.setView([g.lat, g.lon], zoomForKm(state.areaKm));
-    setStatusKey('stFound', { place: g.name.split(',').slice(0, 2).join(',') }, 'ok');
+    setStatusKey('stFound', { place }, 'ok');
   } catch (e) { setStatus(e.message, 'err'); }
 }
 $('searchBtn').addEventListener('click', doSearch);
@@ -1020,8 +1024,9 @@ $('routeSave').addEventListener('click', () => {
   const gpx = '<?xml version="1.0" encoding="UTF-8"?>' +
     '<gpx version="1.1" creator="TopoPuzzle" xmlns="http://www.topografix.com/GPX/1/1">' +
     `<trk><name>TopoPuzzle route</name><trkseg>${seg}</trkseg></trk></gpx>`;
-  download(new Blob([gpx], { type: 'application/gpx+xml' }), 'topopuzzle_route.gpx');
-  setStatusKey('stDownloaded', { file: 'topopuzzle_route.gpx' }, 'ok');
+  const file = placeSlug() + '_route.gpx';
+  download(new Blob([gpx], { type: 'application/gpx+xml' }), file);
+  setStatusKey('stDownloaded', { file }, 'ok');
 });
 
 // The full-depth route has extra choices; the shallow modes have none.
@@ -1725,6 +1730,18 @@ function uniqueRegionSlug(name, index, used = new Set()) {
   used.add(slug); return slug;
 }
 
+/* Exports are named after the searched place or the selected regions, so a
+   downloads folder sorts by location instead of by export type. Several models
+   share one archive, so that case keeps a single neutral prefix. */
+function placeSlug() {
+  return state.placeName ? uniqueRegionSlug(state.placeName, 0) : 'topopuzzle';
+}
+function exportPrefix() {
+  if (state.models.length > 1)
+    return uniqueRegionSlug(state.models.map(m => m.regionName).join(' '), 0);
+  return state.models[0]?.exportName || placeSlug();
+}
+
 function addModelStls(folder, model) {
   for (const P of model.pieces) {
     if (!P.pos.length) continue;
@@ -1756,20 +1773,21 @@ async function exportZip() {
     for (const model of state.models) addModelStls(zip.folder(model.exportName), model);
   } else addModelStls(zip, state.models[0]);
   const blob = await zip.generateAsync({ type: 'blob' });
-  const file = isSeparateRegionOutput() ? 'topopuzzle_regions_pieces.zip' : 'topopuzzle_pieces.zip';
+  const file = exportPrefix() + '_pieces.zip';
   download(blob, file); setStatusKey('stDownloaded', { file }, 'ok');
 }
 async function exportOne() {
   if (!state.models.length) return;
   if (!isSeparateRegionOutput()) {
-    download(new Blob([combinedBinarySTL(state.models[0])], { type: 'model/stl' }), 'topopuzzle_combined.stl');
-    setStatusKey('stDownloaded', { file: 'topopuzzle_combined.stl' }, 'ok'); return;
+    const file = exportPrefix() + '_combined.stl';
+    download(new Blob([combinedBinarySTL(state.models[0])], { type: 'model/stl' }), file);
+    setStatusKey('stDownloaded', { file }, 'ok'); return;
   }
   setStatusKey('stZipping');
   const zip = new JSZip();
   for (const model of state.models) zip.folder(model.exportName).file(
-    'topopuzzle_combined.stl', combinedBinarySTL(model));
-  const file = 'topopuzzle_regions_combined.zip';
+    model.exportName + '_combined.stl', combinedBinarySTL(model));
+  const file = exportPrefix() + '_combined.zip';
   download(await zip.generateAsync({ type: 'blob' }), file);
   setStatusKey('stDownloaded', { file }, 'ok');
 }
@@ -1832,8 +1850,9 @@ $('exportOne').addEventListener('click', gateDownload(exportOne));
 $('exportFrame').addEventListener('click', gateDownload(() => {
   const F = state.model && state.model.frame;
   if (!F) return;
-  download(new Blob([pieceToBinarySTL(frameMergedMesh(F))], { type: 'model/stl' }), 'frame_plate.stl');
-  setStatusKey('stDownloaded', { file: 'frame_plate.stl' }, 'ok');
+  const file = exportPrefix() + '_frame_plate.stl';
+  download(new Blob([pieceToBinarySTL(frameMergedMesh(F))], { type: 'model/stl' }), file);
+  setStatusKey('stDownloaded', { file }, 'ok');
 }));
 
 /* ============================================================================
@@ -2307,17 +2326,17 @@ async function exportBambu() {
         folder.file('README.txt', modelSourceNotes(model));
         if (files.routeBlob) folder.file('route.3mf', files.routeBlob);
       }
-      const file = 'topopuzzle_regions_bambu.zip';
+      const file = exportPrefix() + '_bambu.zip';
       download(await zip.generateAsync({ type: 'blob' }), file);
       setStatusKey('stDownloaded', { file }, 'ok');
     } else {
       const { terrainBlob, routeBlob } = await buildBambuFiles(state.models[0]);
-      download(terrainBlob, 'topopuzzle_bambu_4color.3mf');
+      download(terrainBlob, exportPrefix() + '_bambu_4color.3mf');
       if (routeBlob) {
       // browsers gate back-to-back downloads from one gesture; give the first
       // one a moment to be accepted before asking for the second
       await new Promise(r => setTimeout(r, 500));
-      download(routeBlob, 'topopuzzle_bambu_route.3mf');
+      download(routeBlob, exportPrefix() + '_bambu_route.3mf');
       setStatusKey('stBambuDoneRoute', null, 'ok');
       } else setStatusKey('stBambuDone', null, 'ok');
     }
@@ -2441,10 +2460,12 @@ async function generate() {
     const selectionToken = state.regionOutputMode + '|' + selected.map(r => r.id).join('|');
     let descriptors;
     if (!selected.length) {
-      descriptors = [{ name: 'TopoPuzzle', exportName: 'topopuzzle', bounds: currentAreaBounds(), polygons: null }];
+      descriptors = [{ name: state.placeName || 'TopoPuzzle', exportName: placeSlug(),
+        bounds: currentAreaBounds(), polygons: null }];
     } else if (state.regionOutputMode === 'combined') {
       descriptors = [{
-        name: selected.map(r => r.name).join(' + '), exportName: 'combined_regions',
+        name: selected.map(r => r.name).join(' + '),
+        exportName: uniqueRegionSlug(selected.map(r => r.name).join(' '), 0),
         bounds: unionRegionBounds(selected), polygons: selected.flatMap(r => r.polygons),
         regionIds: selected.map(r => r.id),
       }];
