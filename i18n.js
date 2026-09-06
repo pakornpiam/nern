@@ -61,11 +61,20 @@
     lblRoutePieces: 'Route pieces',
     optSplitPiece: 'Split per puzzle piece',
     optContinuous: 'One continuous route',
+    lblRouteProfile: 'Route profile',
+    optRouteRound: 'Rounded groove',
+    optRouteFlat: 'Flat floor — prints with no support',
     lblRouteWidth: 'Route width',
     lblRouteDepth: 'Groove depth',
+    lblRoutePlugDepth: 'Plug depth',
     lblRouteHeight: 'Ridge height',
     lblRouteClear: 'Fit clearance',
+    hintRoundGroove: 'The groove is rounded, so the red part has a curved underside and may need supports to print.',
+    hintRoundPlug: 'The route cuts all the way through. Switch to a flat floor to stop it short and keep the base solid underneath.',
+    hintFlatGroove: 'The groove has a flat floor {depth} mm deep, so the red part is an even ribbon that prints flat-side down with no support.',
+    hintFlatPlug: 'The route stops {depth} mm below the lowest ground it crosses, so the base stays solid underneath and the plug has a flat bottom that needs no support.',
     hintThroughRoute: 'The {route} mm route reaches the print bottom. Its channel is {channel} mm wide, leaving {clear} mm clearance on each side for assembly.',
+    hintThroughPocket: 'The {route} mm route stops {depth} mm into the print instead of cutting through. Its channel is {channel} mm wide, leaving {clear} mm clearance on each side for assembly.',
     lblAreaSize: 'Area size',
     lblCenterLat: 'Center lat',
     lblCenterLon: 'Center lon',
@@ -231,13 +240,21 @@
     readmeThrough:
       'The route_red_*.stl parts run the full depth of the print. Print them in red\n' +
       '(or any contrast colour) and press them into the channels; each side has\n' +
-      '0.2 mm of clearance.\n',
+      '{clear} mm of clearance.\n',
+    readmeThroughPocket:
+      'The route_red_*.stl parts drop into pockets that stop {floor} mm above the print\n' +
+      'bottom, so the base stays solid under the route. They have flat undersides —\n' +
+      'print them in red (or any contrast colour) with supports OFF; each side has\n' +
+      '{clear} mm of clearance.\n',
     readmeContinuous:
       'route_red_continuous.stl spans every piece, so seat it only once the puzzle\n' +
       'is fully assembled.\n',
     readmeInlay:
       'The route_red_*.stl parts are shallow inlays. Print them in red and press\n' +
       'them into the grooves.\n',
+    readmeInlayFlat:
+      'The route_red_*.stl parts are shallow inlays with flat undersides. Print them\n' +
+      'in red with supports OFF, flat side down, and press them into the grooves.\n',
   };
 
   /* Thai. Terminology choices worth knowing:
@@ -289,11 +306,20 @@
     lblRoutePieces: 'การแบ่งเส้นทาง',
     optSplitPiece: 'แยกตามชิ้นจิ๊กซอว์',
     optContinuous: 'เส้นทางต่อเนื่องชิ้นเดียว',
+    lblRouteProfile: 'รูปหน้าตัดเส้นทาง',
+    optRouteRound: 'ร่องก้นโค้ง',
+    optRouteFlat: 'ก้นแบน — พิมพ์ได้โดยไม่ต้องใช้ซัพพอร์ต',
     lblRouteWidth: 'ความกว้างเส้นทาง',
     lblRouteDepth: 'ความลึกร่อง',
+    lblRoutePlugDepth: 'ความลึกชิ้นเสียบ',
     lblRouteHeight: 'ความสูงสัน',
     lblRouteClear: 'ระยะเผื่อประกอบ',
+    hintRoundGroove: 'ร่องมีก้นโค้ง ชิ้นสีแดงจึงมีใต้ท้องโค้งและอาจต้องใช้ซัพพอร์ตในการพิมพ์',
+    hintRoundPlug: 'เส้นทางตัดทะลุตลอดความหนา เลือกแบบก้นแบนเพื่อให้หยุดก่อนถึงก้นและคงฐานด้านล่างไว้',
+    hintFlatGroove: 'ร่องมีก้นแบนลึก {depth} มม. ชิ้นสีแดงจึงเป็นแถบหนาเท่ากันตลอด วางด้านแบนลงพิมพ์ได้โดยไม่ต้องใช้ซัพพอร์ต',
+    hintFlatPlug: 'เส้นทางหยุดต่ำกว่าพื้นที่ต่ำสุดที่เส้นทางพาดผ่าน {depth} มม. ฐานด้านล่างจึงยังตันอยู่ และชิ้นเสียบมีก้นแบนที่ไม่ต้องใช้ซัพพอร์ต',
     hintThroughRoute: 'เส้นทางกว้าง {route} มม. ทะลุถึงก้นชิ้นงาน ร่องรับกว้าง {channel} มม. เหลือระยะเผื่อข้างละ {clear} มม. สำหรับการประกอบ',
+    hintThroughPocket: 'เส้นทางกว้าง {route} มม. ลึกลงไปในชิ้นงาน {depth} มม. โดยไม่ทะลุ ร่องรับกว้าง {channel} มม. เหลือระยะเผื่อข้างละ {clear} มม. สำหรับการประกอบ',
     lblAreaSize: 'ขนาดพื้นที่',
     lblCenterLat: 'ละติจูดกึ่งกลาง',
     lblCenterLon: 'ลองจิจูดกึ่งกลาง',
@@ -448,12 +474,19 @@
       'พิมพ์ทุกชิ้นแล้วนำมาต่อกันเป็นจิ๊กซอว์ เดือยล็อกเข้ากันพอดีตามที่ออกแบบไว้\n',
     readmeThrough:
       'ไฟล์ route_red_*.stl เป็นชิ้นเส้นทางที่ทะลุตลอดความหนาของชิ้นงาน\n' +
-      'พิมพ์ด้วยสีแดง (หรือสีที่ตัดกัน) แล้วกดลงในร่อง มีระยะเผื่อข้างละ 0.2 มม.\n',
+      'พิมพ์ด้วยสีแดง (หรือสีที่ตัดกัน) แล้วกดลงในร่อง มีระยะเผื่อข้างละ {clear} มม.\n',
+    readmeThroughPocket:
+      'ไฟล์ route_red_*.stl เป็นชิ้นที่เสียบลงในร่องซึ่งหยุดสูงจากก้นชิ้นงาน {floor} มม.\n' +
+      'ฐานใต้เส้นทางจึงยังตันอยู่ ชิ้นเหล่านี้มีก้นแบน พิมพ์ด้วยสีแดง (หรือสีที่ตัดกัน)\n' +
+      'โดยปิดซัพพอร์ต มีระยะเผื่อข้างละ {clear} มม.\n',
     readmeContinuous:
       'ไฟล์ route_red_continuous.stl พาดยาวข้ามทุกชิ้น จึงควรใส่หลังจากต่อจิ๊กซอว์\n' +
       'ครบทุกชิ้นแล้วเท่านั้น\n',
     readmeInlay:
       'ไฟล์ route_red_*.stl เป็นแถบฝังตื้น พิมพ์ด้วยสีแดงแล้วกดลงในร่อง\n',
+    readmeInlayFlat:
+      'ไฟล์ route_red_*.stl เป็นแถบฝังตื้นที่มีใต้ท้องแบน พิมพ์ด้วยสีแดงโดยปิดซัพพอร์ต\n' +
+      'วางด้านแบนลง แล้วกดลงในร่อง\n',
   };
 
   Object.assign(en, {
