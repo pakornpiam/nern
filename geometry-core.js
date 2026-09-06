@@ -17,6 +17,11 @@ const THROUGH_ROUTE_RAISE = 0.6; // routeTop:'raised' lift, a finish choice, not
 // slider defaults prints exactly as it always did.
 const ROUTE_W = 3.2, ROUTE_D = 1.2, ROUTE_C = 0.2;
 
+/* A partial-depth through route always leaves at least this much slab under the
+   channel, so a route running along the very lowest ground still prints on a floor
+   instead of falling back to a full-depth cut. */
+const MIN_ROUTE_FLOOR = 1.0;
+
 /* Resolved once per build, then carried on model.grid: buildBandSolidMesh and
    buildWaterCapMesh re-cut the same channel for the banded and water-skin exports
    but only ever receive `model`, and fuseCity needs the shallow half-width to keep
@@ -33,11 +38,23 @@ function resolveRouteDims(opts = {}, cellDiagonal = 0) {
      diagonal is the worst case over every route orientation. */
   const asked = width / 2;
   const halfW = Math.max(asked, cellDiagonal / 2);
+  const depth = clamp(n(opts.routeDepthMM, ROUTE_D), 0.2, 3);
   return {
     halfW,                                                // shallow stamp + through route
     askedHalfW: asked,                                    // caller reports the difference
-    depth: clamp(n(opts.routeDepthMM, ROUTE_D), 0.2, 3),  // magnitude; the mode picks the sign
-    channelHalf: halfW + clamp(n(opts.routeClearMM, ROUTE_C), 0, 0.8)
+    depth,                                                // magnitude; the mode picks the sign
+    channelHalf: halfW + clamp(n(opts.routeClearMM, ROUTE_C), 0, 0.8),
+    /* 'flat' swaps the rounded cross-section for a flat floor, so the inlay insert
+       gets a real contact patch on the bed instead of the parabola's single touching
+       line, and lets the through route stop at a floor instead of cutting to z=0.
+       Anything but the explicit opt-in is the original rounded profile. */
+    profile: opts.routeProfile === 'flat' ? 'flat' : 'round',
+    /* Width of the chamfered wall either side of that flat floor. Floored at the cell
+       diagonal for the same reason halfW is — the stamp is only sampled at grid
+       VERTICES, so a chamfer narrower than one cell aliases into a step the grid
+       cannot carry — and capped below halfW so the floor never vanishes. On a grid
+       coarse enough for the floor to win, this degrades back towards the rounded ramp. */
+    chamfer: clamp(Math.min(depth, halfW * 0.35), cellDiagonal, halfW * 0.9)
   };
 }
 const DEFAULT_CHANNEL_HALF = ROUTE_W / 2 + ROUTE_C; // fallback for models built before route dims
@@ -251,16 +268,24 @@ function addVerticalWall(mesh, a, b, bottomOf) {
   meshTri(mesh, b, ab, bb);
 }
 
-function addClippedPrismTriangle(mesh, triangle, threshold, keepInside, bottomOf) {
-  const poly = clipScalarPolygon(triangle, threshold, keepInside);
-  if (poly.length < 3) return;
+/* Top fan over the polygon plus the matching bottom fan, both emitted over the SAME
+   vertices so no T-junction appears where a clipped cap meets its walls. topZ flattens
+   the top onto a plane — the pocket floor — instead of the height it was clipped from. */
+function addPrismCaps(mesh, poly, bottomOf, topZ = null) {
+  const top = v => (topZ === null ? v : { ...v, z: topZ });
   for (let k = 1; k + 1 < poly.length; k++) {
-    meshTri(mesh, poly[0], poly[k], poly[k + 1]);
+    meshTri(mesh, top(poly[0]), top(poly[k]), top(poly[k + 1]));
     const a = { ...poly[0], z: bottomOf(poly[0]) };
     const b = { ...poly[k + 1], z: bottomOf(poly[k + 1]) };
     const c = { ...poly[k], z: bottomOf(poly[k]) };
     meshTri(mesh, a, b, c);
   }
+}
+
+function addClippedPrismTriangle(mesh, triangle, threshold, keepInside, bottomOf) {
+  const poly = clipScalarPolygon(triangle, threshold, keepInside);
+  if (poly.length < 3) return;
+  addPrismCaps(mesh, poly, bottomOf);
   for (let k = 0; k < poly.length; k++) {
     const a = poly[k], b = poly[(k + 1) % poly.length];
     if (Math.abs(a.d - threshold) <= CLIP_EPS && Math.abs(b.d - threshold) <= CLIP_EPS)
@@ -268,10 +293,73 @@ function addClippedPrismTriangle(mesh, triangle, threshold, keepInside, bottomOf
   }
 }
 
+/* The partial-depth route's cell: one closed solid whose top STEPS DOWN to a flat
+   pocket floor inside the channel, instead of the channel being cut clean away. The
+   slab under the route survives, and the plug that drops in gets a genuinely planar
+   underside — it prints on the bed with no support.
+
+   Watertight because both caps are emitted over the clipped polygons rather than the
+   original triangle, so the chord vertices line up: the terrain cap's chord edge pairs
+   with the step wall's top, the floor cap's chord edge with the step wall's bottom, and
+   the two bottom caps meet along the chord. The step wall deliberately stops at floorZ
+   rather than running down to the bottom — that is the whole difference from a cut. */
+function addPocketPrismTriangle(mesh, triangle, threshold, floorZ, bottomOf) {
+  const outer = clipScalarPolygon(triangle, threshold, false);  // terrain side
+  const inner = clipScalarPolygon(triangle, threshold, true);   // pocket side
+  if (outer.length >= 3) {
+    addPrismCaps(mesh, outer, bottomOf);
+    /* Step down to the floor along the shared chord. Walking the TERRAIN side puts the
+       pocket on the wall's outward face — the inner chord runs the other way and would
+       invert it — and stopping at floorZ rather than at the bottom is the whole
+       difference between this and the cut it replaces. */
+    for (let k = 0; k < outer.length; k++) {
+      const a = outer[k], b = outer[(k + 1) % outer.length];
+      if (Math.abs(a.d - threshold) <= CLIP_EPS && Math.abs(b.d - threshold) <= CLIP_EPS)
+        addVerticalWall(mesh, a, b, () => floorZ);
+    }
+  }
+  if (inner.length >= 3) addPrismCaps(mesh, inner, bottomOf, floorZ);  // interior: no wall
+}
+
 function addClippedBoundaryWall(mesh, a, b, threshold, keepInside, bottomOf) {
   const edge = clipScalarSegment(a, b, threshold, keepInside);
   if (edge && Math.hypot(edge[1].x - edge[0].x, edge[1].y - edge[0].y) > CLIP_EPS)
     addVerticalWall(mesh, edge[0], edge[1], bottomOf);
+}
+
+/* BOTH halves of an exposed cell edge for a pocket cell — callers must not add the
+   plain clipped wall as well. The channel half is topped at the pocket floor; the
+   terrain half carries an EXTRA vertex at floorZ on its cut end.
+
+   That extra vertex is load-bearing. Without it the terrain curtain's cut vertical runs
+   bottom-to-terrain as one edge, while the step wall and the channel curtain split the
+   same line at floorZ — a T-junction, which Manifold rejects outright rather than
+   tolerating. Only the CUT end is split; the vertical at a genuine cell corner is
+   shared with the neighbour's unsplit curtain and must stay whole. */
+function addPocketBoundaryWall(mesh, a, b, threshold, floorZ, bottomOf) {
+  addClippedBoundaryWall(mesh, { ...a, z: floorZ }, { ...b, z: floorZ }, threshold, true, bottomOf);
+  const edge = clipScalarSegment(a, b, threshold, false);
+  if (!edge) return;
+  const [p, q] = edge;
+  if (Math.hypot(q.x - p.x, q.y - p.y) <= CLIP_EPS) return;
+  /* Detect the cut by distance, not by identity: where the channel edge passes exactly
+     through a grid vertex, both ends satisfy the inclusive test and no vertex is
+     interpolated at all, yet the step wall and channel curtain still split there. */
+  const cutP = Math.abs(p.d - threshold) <= CLIP_EPS;
+  const cutQ = Math.abs(q.d - threshold) <= CLIP_EPS;
+  if (cutP === cutQ) { addVerticalWall(mesh, p, q, bottomOf); return; }  // 0 or 2 cuts: a plain quad
+  const at = (v, z) => ({ x: v.x, y: v.y, z });
+  const loop = [p];
+  if (cutP) loop.push(at(p, floorZ));
+  loop.push(at(p, bottomOf(p)), at(q, bottomOf(q)));
+  if (cutQ) loop.push(at(q, floorZ));
+  loop.push(q);
+  /* Fan from off the collinear run. The three vertices on the split end share an XY, so
+     an apex among them yields a zero-area triangle, which meshTri drops — reopening the
+     very hole this pentagon exists to close. */
+  const n = loop.length, apex = cutP ? n - 1 : 0;
+  for (let k = 1; k + 1 < n; k++)
+    meshTri(mesh, loop[apex], loop[(apex + k) % n], loop[(apex + k + 1) % n]);
 }
 
 /* Pure CPU and synchronous. onStep defaults to a no-op and the live rebuild path
@@ -359,6 +447,14 @@ function buildGeometry(src, opts, onStep = () => {}) {
     const halfW = routeDims.halfW;                            // shallow-mode half-width (mm)
     // emboss stands proud, inlay and engrave cut in; the slider carries the magnitude
     const dMM = (opts.routeMode === 'emboss' ? 1 : -1) * routeDims.depth;
+    /* Cross-section, resolved once rather than per vertex. Both shapes are 1 at the
+       centre and 0 at halfW, so the route's depth and the model's height range are the
+       same either way — only the shape between them changes. The flat floor is what
+       gives the inlay insert a real contact patch on the bed instead of the parabola's
+       single touching line, which is what made it need supports. */
+    const shape = routeDims.profile === 'flat'
+      ? d => clamp((routeDims.halfW - d) / routeDims.chamfer, 0, 1)
+      : d => 1 - (d / routeDims.halfW) ** 2;
     // route lat/lon → model mm (same mapping as vertex X/Y below)
     const seg = opts.routePath.map(([la, lo]) => [
       (lo - lonW) / (lonE - lonW) * modelWidth,
@@ -380,8 +476,7 @@ function buildGeometry(src, opts, onStep = () => {}) {
         if (throughRoute) {
           routeDist[j * VW + i] = d;
         } else if (d < halfW) {
-          const f = 1 - (d / halfW) ** 2;                     // rounded cross-section
-          const dE = (dMM * f) / zSc;
+          const dE = (dMM * shape(d)) / zSc;
           Hv[j * VW + i] += dE;
           if (rd) rd[j * VW + i] = -dE;                       // groove depth (m, positive)
         }
@@ -413,6 +508,42 @@ function buildGeometry(src, opts, onStep = () => {}) {
 
   const inPiece = (i, j, p) => (i >= 0 && j >= 0 && i < W && j < D && piece[j * W + i] === p && !!cellShape[j * W + i]);
 
+  /* --- the partial-depth route's floor: ONE global horizontal plane ---
+     A plane, not a constant offset under the terrain, because only a plane gives the
+     plug a genuinely planar underside — the thing that lets it print on the bed with no
+     support. It is also strictly less material than the full-depth cut it replaces, and
+     it leaves the base slab under the route intact.
+
+     The minimum runs over all four corners of every cell the channel TOUCHES, not over
+     the channel's own vertices. Terrain is linear across a cell, so a chord point
+     interpolates towards an out-of-channel vertex that a cliff can put far lower; a
+     floor above that chord inverts the step wall into a self-intersection that stays
+     perfectly watertight and silently ADDS volume, so no closedness check would catch
+     it. Corners bound the chord by linearity.
+
+     The water skin sinks band tops by WATER_CAP_MM, and applyWaterLevel can re-run on an
+     already-built model, so that allowance is unconditional whenever water is on. */
+  let routeFloorZ = 0;
+  if (throughRoute && routeDist && routeDims.profile === 'flat') {
+    const ch = routeDims.channelHalf;
+    let minTop = Infinity;
+    for (let j = 0; j < D; j++) {
+      for (let i = 0; i < W; i++) {
+        if (!cellShape[j * W + i]) continue;
+        const d00 = routeDist[j * VW + i], d10 = routeDist[j * VW + i + 1];
+        const d01 = routeDist[(j + 1) * VW + i], d11 = routeDist[(j + 1) * VW + i + 1];
+        if (d00 > ch && d10 > ch && d01 > ch && d11 > ch) continue;
+        const e = Math.min(H(i, j), H(i + 1, j), H(i, j + 1), H(i + 1, j + 1));
+        if (e < minTop) minTop = e;
+      }
+    }
+    const floor = zOf(minTop) - (waterOn ? WATER_CAP_MM : 0) - routeDims.depth;
+    // Too deep to leave a slab worth printing: fall back to the full-depth cut, which is
+    // exactly what a through route has always been. One global decision, so the pieces,
+    // the bands and the plug can never disagree about which of the two they built.
+    if (isFinite(floor) && floor >= MIN_ROUTE_FLOOR) routeFloorZ = floor;
+  }
+
   function tri(P, ax, ay, az, bx, by, bz, cx, cy, cz) {
     // Y(j) flips the grid's j axis, which mirrors orientation — emit as
     // (a, c, b) so faces wind outward.
@@ -439,14 +570,27 @@ function buildGeometry(src, opts, onStep = () => {}) {
         const v11 = { x: x1, y: y1, z: h11, d: routeDist[(j + 1) * VW + i + 1] };
         const v01 = { x: x0, y: y1, z: h01, d: routeDist[(j + 1) * VW + i] };
         const bottom = () => 0;
-        // Actual CCW top triangles; retain only terrain outside the channel.
-        addClippedPrismTriangle(P, [v00, v11, v10], routeDims.channelHalf, false, bottom);
-        addClippedPrismTriangle(P, [v00, v01, v11], routeDims.channelHalf, false, bottom);
-        // Cell perimeter in CCW order, with the cell interior on the left.
-        if (!inPiece(i - 1, j, p)) addClippedBoundaryWall(P, v00, v01, routeDims.channelHalf, false, bottom);
-        if (!inPiece(i, j + 1, p)) addClippedBoundaryWall(P, v01, v11, routeDims.channelHalf, false, bottom);
-        if (!inPiece(i + 1, j, p)) addClippedBoundaryWall(P, v11, v10, routeDims.channelHalf, false, bottom);
-        if (!inPiece(i, j - 1, p)) addClippedBoundaryWall(P, v10, v00, routeDims.channelHalf, false, bottom);
+        const ch = routeDims.channelHalf;
+        // Actual CCW top triangles. A full-depth route retains only terrain outside the
+        // channel; a partial-depth one steps the top down to the floor instead.
+        if (routeFloorZ > 0) {
+          addPocketPrismTriangle(P, [v00, v11, v10], ch, routeFloorZ, bottom);
+          addPocketPrismTriangle(P, [v00, v01, v11], ch, routeFloorZ, bottom);
+          // Cell perimeter in CCW order, with the cell interior on the left. The pocket
+          // wall emits both halves of the edge, so it replaces the clipped one outright.
+          if (!inPiece(i - 1, j, p)) addPocketBoundaryWall(P, v00, v01, ch, routeFloorZ, bottom);
+          if (!inPiece(i, j + 1, p)) addPocketBoundaryWall(P, v01, v11, ch, routeFloorZ, bottom);
+          if (!inPiece(i + 1, j, p)) addPocketBoundaryWall(P, v11, v10, ch, routeFloorZ, bottom);
+          if (!inPiece(i, j - 1, p)) addPocketBoundaryWall(P, v10, v00, ch, routeFloorZ, bottom);
+        } else {
+          addClippedPrismTriangle(P, [v00, v11, v10], ch, false, bottom);
+          addClippedPrismTriangle(P, [v00, v01, v11], ch, false, bottom);
+          // Cell perimeter in CCW order, with the cell interior on the left.
+          if (!inPiece(i - 1, j, p)) addClippedBoundaryWall(P, v00, v01, ch, false, bottom);
+          if (!inPiece(i, j + 1, p)) addClippedBoundaryWall(P, v01, v11, ch, false, bottom);
+          if (!inPiece(i + 1, j, p)) addClippedBoundaryWall(P, v11, v10, ch, false, bottom);
+          if (!inPiece(i, j - 1, p)) addClippedBoundaryWall(P, v10, v00, ch, false, bottom);
+        }
       } else {
         // TOP surface (two tris, normals up)
         tri(P, x0, y0, h00, x1, y0, h10, x1, y1, h11);
@@ -547,7 +691,10 @@ function buildGeometry(src, opts, onStep = () => {}) {
         const v10 = { x: x1, y: y0, z: zOf(H(i + 1, j)) + raise, d: routeDist[j * VW + i + 1] };
         const v11 = { x: x1, y: y1, z: zOf(H(i + 1, j + 1)) + raise, d: routeDist[(j + 1) * VW + i + 1] };
         const v01 = { x: x0, y: y1, z: zOf(H(i, j + 1)) + raise, d: routeDist[(j + 1) * VW + i] };
-        const bottom = () => 0;
+        // The plug is a pure inner prism, so a flat bottom is exactly this one line: it
+        // stops at the pocket floor instead of the print bottom. Its side walls stay the
+        // same crisp distance-field clip, so the assembly fit is unchanged.
+        const bottom = () => routeFloorZ;
         addClippedPrismTriangle(R, [v00, v11, v10], routeDims.halfW, true, bottom);
         addClippedPrismTriangle(R, [v00, v01, v11], routeDims.halfW, true, bottom);
         if (!sameRoutePart(i - 1, j, p)) addClippedBoundaryWall(R, v00, v01, routeDims.halfW, true, bottom);
@@ -578,6 +725,8 @@ function buildGeometry(src, opts, onStep = () => {}) {
     // the model so the page's cheap recolour path can flip it without a rebuild.
     waterOff: !waterOn,
     routeMode: opts.routeMode, routeTop: opts.routeTop || 'flush', routeJoin: opts.routeJoin || 'piece',
+    // Resolved, not raw: the page reads it back for the export README and the slicer profile.
+    routeProfile: routeDims.profile,
     // What the grid could carry, and what was asked for — equal unless the route was
     // too thin to survive sampling at this detail.
     routeStampedWidthMM: routeDims.halfW * 2, routeAskedWidthMM: routeDims.askedHalfW * 2,
@@ -587,10 +736,11 @@ function buildGeometry(src, opts, onStep = () => {}) {
     maxZ,
     // filled in by applyWaterLevel + syncBandsToModel below
     hasWater: false, NB: 4, landMin: minE, waterLevelM: 0, bandCutsM: [], zCuts: [],
-    // routeHalf/channelHalf ride along with routeDist because the band and
-    // water-cap mesh builders re-cut this channel from `model` alone.
+    // routeHalf/channelHalf/routeFloorZ ride along with routeDist because the band and
+    // water-cap mesh builders re-cut this channel from `model` alone. routeFloorZ is 0
+    // for a full-depth route, which is what a model built before pockets also reads as.
     grid: { Hv, piece, water, osmWater, cellShape, routeDist, routeHalf: routeDims.halfW,
-      channelHalf: routeDims.channelHalf, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
+      channelHalf: routeDims.channelHalf, routeFloorZ, W, D, VW, dx, dy, baseMM, zScale, modelDepth }
   };
   // Flood to the requested level now that the emboss (if any) has settled the heights.
   applyWaterLevel(model, opts.waterLevelM, opts.autoFallback);
@@ -841,6 +991,15 @@ function buildBandSolidMesh(model, pieceId, band) {
   const pos = [];
   const mesh = { pos };
   const cutThrough = model.routeMode === 'through' && routeDist;
+  /* Bands are horizontal slabs, so the route's floor plane sorts them by comparison
+     alone: a band entirely under the floor never sees the route, one entirely above it
+     takes the clean full-height hole a through route has always cut, and only the single
+     band straddling the floor carries the step. MINT keeps the floor from splitting a
+     band into a sliver too thin to mesh; the volume that costs is bounded by
+     MINT x channel area, which is ~1e-4 of a piece. */
+  const routeFloorZ = model.grid.routeFloorZ ?? 0;   // absent on models built before pockets
+  const carve = cutThrough && routeFloorZ <= cLo + MINT;
+  const pocket = cutThrough && !carve && routeFloorZ < cHi - MINT;
   // Y(j) flips the grid's j axis, which mirrors orientation — emit as
   // (a, c, b) so faces wind outward (3MF requires CCW-outward triangles).
   const push = (ax, ay, az, bx, by, bz, cx, cy, cz) => pos.push(ax, ay, az, cx, cy, cz, bx, by, bz);
@@ -855,26 +1014,37 @@ function buildBandSolidMesh(model, pieceId, band) {
       // a dry cell beside a wet one now sits WATER_CAP_MM proud of it; the dry
       // side (the higher one) closes that step so the solid stays watertight
       const step = (ci, cj) => cap && inc(ci, cj) && !wetC(i, j) && wetC(ci, cj);
-      if (cutThrough) {
+      if (carve || pocket) {
         const v00 = { x: x0, y: y0, z: t00, d: routeDist[j * VW + i] };
         const v10 = { x: x1, y: y0, z: t10, d: routeDist[j * VW + i + 1] };
         const v11 = { x: x1, y: y1, z: t11, d: routeDist[(j + 1) * VW + i + 1] };
         const v01 = { x: x0, y: y1, z: t01, d: routeDist[(j + 1) * VW + i] };
         const bottom = () => zb;
-        addClippedPrismTriangle(mesh, [v00, v11, v10], channelHalf, false, bottom);
-        addClippedPrismTriangle(mesh, [v00, v01, v11], channelHalf, false, bottom);
-        // step walls carry the neighbour's top as their floor; lerpClipVertex
-        // propagates `bottom`, so the clipped channel edge follows the step
+        /* The two paths differ only in whether the channel is emptied to the band floor
+           or stepped down to the route floor, so they share every wall decision below.
+           A pocket wall emits BOTH halves of an exposed edge, replacing the clipped one. */
+        const face = pocket
+          ? t => addPocketPrismTriangle(mesh, t, channelHalf, routeFloorZ, bottom)
+          : t => addClippedPrismTriangle(mesh, t, channelHalf, false, bottom);
+        const edge = pocket
+          ? (a, b) => addPocketBoundaryWall(mesh, a, b, channelHalf, routeFloorZ, bottom)
+          : (a, b) => addClippedBoundaryWall(mesh, a, b, channelHalf, false, bottom);
+        face([v00, v11, v10]);
+        face([v00, v01, v11]);
+        /* Step walls carry the neighbour's top as their floor; lerpClipVertex propagates
+           `bottom`, so the clipped channel edge follows the step. They stay clipped to the
+           terrain side in both paths: inside the channel both cells' tops are the route
+           floor regardless of wetness, so there is no water step there to close. */
         const stepWall = (a, b, ci, cj, za, zbb) => addClippedBoundaryWall(
           mesh, Object.assign({}, a, { bottom: za }), Object.assign({}, b, { bottom: zbb }),
           channelHalf, false, v => v.bottom);
-        if (!inc(i - 1, j)) addClippedBoundaryWall(mesh, v00, v01, channelHalf, false, bottom);
+        if (!inc(i - 1, j)) edge(v00, v01);
         else if (step(i - 1, j)) stepWall(v00, v01, i - 1, j, topV(i, j, i - 1, j), topV(i, j + 1, i - 1, j));
-        if (!inc(i, j + 1)) addClippedBoundaryWall(mesh, v01, v11, channelHalf, false, bottom);
+        if (!inc(i, j + 1)) edge(v01, v11);
         else if (step(i, j + 1)) stepWall(v01, v11, i, j + 1, topV(i, j + 1, i, j + 1), topV(i + 1, j + 1, i, j + 1));
-        if (!inc(i + 1, j)) addClippedBoundaryWall(mesh, v11, v10, channelHalf, false, bottom);
+        if (!inc(i + 1, j)) edge(v11, v10);
         else if (step(i + 1, j)) stepWall(v11, v10, i + 1, j, topV(i + 1, j + 1, i + 1, j), topV(i + 1, j, i + 1, j));
-        if (!inc(i, j - 1)) addClippedBoundaryWall(mesh, v10, v00, channelHalf, false, bottom);
+        if (!inc(i, j - 1)) edge(v10, v00);
         else if (step(i, j - 1)) stepWall(v10, v00, i, j - 1, topV(i + 1, j, i, j - 1), topV(i, j, i, j - 1));
       } else {
         // top

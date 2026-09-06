@@ -80,6 +80,14 @@
         <option value="engrave" data-i18n="optEngrave">Engraved groove</option>
         <option value="off" data-i18n="optOff">Off</option>
       </select>
+      <label class="row" style="margin-top:8px" data-i18n="lblRouteProfile">Route profile</label>
+      <select id="routeProfile">
+        <option value="round" selected data-i18n="optRouteRound">Rounded groove</option>
+        <option value="flat" data-i18n="optRouteFlat">Flat floor — prints with no support</option>
+      </select>
+      <!-- Like #routeHint below, this carries NO data-i18n: renderRouteUI swaps its key
+           by profile, and applyI18n blanket-assigns textContent to every tagged element. -->
+      <div class="hint" id="routeProfileHint"></div>
       <!-- The label spans carry NO data-i18n: the depth label swaps key by mode, so
            renderRouteUI owns them and applyI18n must not write over it. Same hazard
            the #areaVal comment below documents. -->
@@ -1129,7 +1137,8 @@ $('routeSave').addEventListener('click', () => {
 const routeDimOpts = () => ({
   routeWidthMM: parseFloat($('routeWidth').value),
   routeDepthMM: parseFloat($('routeDepth').value),
-  routeClearMM: parseFloat($('routeClearance').value)
+  routeClearMM: parseFloat($('routeClearance').value),
+  routeProfile: $('routeProfile').value
 });
 /* The full-depth route has extra choices; the shallow modes have none. This also
    owns every piece of route text that depends on runtime state — the depth label,
@@ -1137,21 +1146,37 @@ const routeDimOpts = () => ({
    move — because applyI18n would otherwise write the raw template over them. */
 function renderRouteUI() {
   const mode = $('routeMode').value, off = mode === 'off', through = mode === 'through';
+  const flat = $('routeProfile').value === 'flat';
   $('throughRouteOpts').style.display = through ? '' : 'none';
   $('routeWidth').disabled = off;
-  // A full-depth route reaches the bottom by definition, so depth means nothing there.
-  $('routeDepth').disabled = off || through;
+  $('routeProfile').disabled = off;
+  /* A rounded full-depth route reaches the bottom by definition, so depth means nothing
+     there; the flat profile stops it at a floor instead, which is exactly what the
+     depth then sets. */
+  $('routeDepth').disabled = off || (through && !flat);
   $('routeWidthLbl').textContent = t('lblRouteWidth');
-  $('routeDepthLbl').textContent = t(mode === 'emboss' ? 'lblRouteHeight' : 'lblRouteDepth');
+  $('routeDepthLbl').textContent = t(mode === 'emboss' ? 'lblRouteHeight'
+    : through ? 'lblRoutePlugDepth' : 'lblRouteDepth');
   $('routeClearanceLbl').textContent = t('lblRouteClear');
   const d = routeDimOpts();
-  $('routeHint').textContent = t('hintThroughRoute', {
+  // A full-depth route has vertical walls, not a rounded groove, so the two modes need
+  // different wording for the same profile.
+  $('routeProfileHint').textContent = off ? ''
+    : t(through ? (flat ? 'hintFlatPlug' : 'hintRoundPlug')
+                : (flat ? 'hintFlatGroove' : 'hintRoundGroove'),
+        { depth: d.routeDepthMM.toFixed(1) });
+  $('routeHint').textContent = t(flat ? 'hintThroughPocket' : 'hintThroughRoute', {
     route: d.routeWidthMM.toFixed(1),
     channel: (d.routeWidthMM + 2 * d.routeClearMM).toFixed(1),
-    clear: d.routeClearMM.toFixed(2)
+    clear: d.routeClearMM.toFixed(2),
+    depth: d.routeDepthMM.toFixed(1)
   });
 }
 $('routeMode').addEventListener('change', renderRouteUI);
+/* The profile only restamps geometry the cached source already covers, so it takes the
+   same debounced worker rebuild the dimension sliders do — and is absent from
+   generationInputs for the same reason they are. */
+$('routeProfile').addEventListener('change', () => onRouteDimChange(true));
 renderRouteUI();
 
 /* Route dimensions only restamp geometry the cached source already covers, so they
@@ -1955,10 +1980,14 @@ function addModelStls(folder, model) {
     }
   }
   if (model.frame) folder.file('frame_plate.stl', pieceToBinarySTL(frameMergedMesh(model.frame)));
+  const pocket = (model.grid?.routeFloorZ ?? 0) > 0;
+  const clear = ((model.grid?.channelHalf ?? 0) - (model.grid?.routeHalf ?? 0)).toFixed(2);
   const routeNote = !model.routeParts ? ''
     : model.routeMode === 'through'
-      ? t('readmeThrough') + (model.routeJoin === 'continuous' ? t('readmeContinuous') : '')
-      : t('readmeInlay');
+      ? t(pocket ? 'readmeThroughPocket' : 'readmeThrough',
+          { clear, floor: (model.grid.routeFloorZ ?? 0).toFixed(1) }) +
+        (model.routeJoin === 'continuous' ? t('readmeContinuous') : '')
+      : t(model.routeProfile === 'flat' ? 'readmeInlayFlat' : 'readmeInlay');
   folder.file('README.txt', t('readmeHead', {
     nx: model.nx, ny: model.ny, w: model.modelWidth.toFixed(1), d: model.modelDepth.toFixed(1),
   }) + routeNote + '\n' + modelSourceNotes(model));
@@ -2315,6 +2344,11 @@ function topoPrintProfile(model) {
      true horizontal plane, and ironing it makes the lakes read as polished sheets
      against the textured land. So ask for it only when there is something to iron. */
   if (model && model.flatWater && model.hasWater) p.ironing_type = 'top';
+  /* The flat profile exists so every part rests on a face rather than a curve. Say so in
+     the sliced file: left to a preset with supports on, the slicer would happily fill
+     the route channel with the very structures this profile removes the need for. Only
+     asserted for the flat profile, so a rounded model keeps whatever the preset says. */
+  if (model && model.routeProfile === 'flat') p.enable_support = '0';
   return p;
 }
 

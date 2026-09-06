@@ -89,18 +89,25 @@ export async function fuseCity(model, progress = () => {}) {
   const owned = [], own = x => { owned.push(x); return x; };
   try {
     const solids = model.pieces.map(p => p.pos.length ? own(fromSoup(api, p.pos)) : null);
-    // Every piece has a flat base; slicing it also preserves full-depth routes.
+    // Every piece has a flat base; slicing it also preserves full-depth routes. A
+    // PARTIAL-depth route is solid at this height, so its corridor has to be subtracted
+    // explicitly below — the slice alone would let buildings stand in the pocket.
     const outlines = solids.map(s => s ? own(s.slice(model.grid.baseMM * 0.5)) : null);
     let routeClearance = null;
     if (model.routeParts?.length && model.routeMode === 'inlay') {
       const projections = model.routeParts.map(p => own(own(fromSoup(api, p.pos)).project()));
       routeClearance = own(CrossSection.union(projections));
-    } else if (['engrave', 'emboss'].includes(model.routeMode) && model.opts.routePath?.length > 1) {
+    } else if (['engrave', 'emboss', 'through'].includes(model.routeMode) && model.opts.routePath?.length > 1) {
       const [[s, w], [n, e]] = model.src.bounds;
       const pts = model.opts.routePath.map(([lat, lon]) => [(lon - w) / (e - w) * model.modelWidth, (lat - s) / (n - s) * model.modelDepth]);
-      // The half-width buildGeometry actually stamped with — read off the grid rather
-      // than re-resolved, since that value may have been floored to the cell size.
-      const half = model.grid.routeHalf ?? TopoGeometry.resolveRouteDims(model.opts).halfW;
+      /* The half-width buildGeometry actually stamped with — read off the grid rather
+         than re-resolved, since that value may have been floored to the cell size. A
+         through route sweeps the CHANNEL, the hole actually cut in the terrain, so the
+         assembly clearance ring is kept clear too; for a full-depth one this only
+         re-subtracts what the slice already excluded, so it changes nothing. */
+      const half = model.routeMode === 'through'
+        ? (model.grid.channelHalf ?? TopoGeometry.resolveRouteDims(model.opts).channelHalf)
+        : (model.grid.routeHalf ?? TopoGeometry.resolveRouteDims(model.opts).halfW);
       const strips = [];
       for (let i = 1; i < pts.length; i++) {
         const a = pts[i - 1], b = pts[i], len = Math.hypot(b[0] - a[0], b[1] - a[1]);

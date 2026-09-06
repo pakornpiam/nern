@@ -316,6 +316,63 @@ test('route dimension sliders restamp the model from the cached source', async (
   expect(errors).toEqual([]);
 });
 
+test('the flat route profile restamps from the cached source and frees the depth slider', async ({ page }) => {
+  const errors = await setup(page);
+  await installFixture(page, { samples: 100 });
+  await page.evaluate(() => {
+    setArea(0.001, 0.001, 0.2, 0.2);
+    route.pts = [[0.0002, 0.001], [0.0018, 0.001]];
+    redrawRoute();
+  });
+  await page.selectOption('#routeMode', 'through');
+  // Rounded is the default, and a full-depth route reaches the bottom by definition.
+  await expect(page.locator('#routeProfile')).toHaveValue('round');
+  await expect(page.locator('#routeDepth')).toBeDisabled();
+  await expect(page.locator('#routeProfileHint')).toContainText('cuts all the way through');
+
+  // Count source fetches: switching profile must restamp from the cached source.
+  await page.evaluate(() => {
+    const original = getTerrainSources;
+    window.srcCalls = 0;
+    getTerrainSources = async (...args) => { window.srcCalls++; return original(...args); };
+  });
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  expect(await page.evaluate(() => window.srcCalls)).toBe(1);
+  expect(await page.evaluate(() => state.model.grid.routeFloorZ)).toBe(0);
+
+  await page.selectOption('#routeProfile', 'flat');
+  await expect(page.locator('#routeDepth')).toBeEnabled();
+  await expect(page.locator('#routeDepthLbl')).toHaveText('Plug depth');
+  await expect.poll(() => page.evaluate(() => !rebuildController && state.model.grid.routeFloorZ > 0),
+    { timeout: 20000 }).toBe(true);
+  expect(await page.evaluate(() => window.srcCalls)).toBe(1);
+  await expect(page.locator('#routeHint')).toContainText('instead of cutting through');
+
+  // Depth now drives how far the plug sinks; a shallower one leaves a higher floor.
+  const deep = await page.evaluate(() => state.model.grid.routeFloorZ);
+  await page.locator('#routeDepth').fill('0.4');
+  await page.locator('#routeDepth').dispatchEvent('input');
+  await expect.poll(() => page.evaluate(() => !rebuildController && state.model.grid.routeFloorZ),
+    { timeout: 20000 }).toBeGreaterThan(deep);
+  expect(await page.evaluate(() => window.srcCalls)).toBe(1);
+
+  // The sliced 3MF asserts what the option promises, rather than leaving it to a preset.
+  expect(await page.evaluate(() => topoPrintProfile(state.model).enable_support)).toBe('0');
+  expect(await page.evaluate(() => topoPrintProfile({ routeProfile: 'round' }).enable_support)).toBeUndefined();
+
+  // Shallow modes keep their own wording, in either language.
+  await page.selectOption('#routeMode', 'inlay');
+  await expect(page.locator('#routeProfileHint')).toContainText('flat-side down');
+  await page.click('#langTh');
+  await expect(page.locator('#routeDepthLbl')).toHaveText('ความลึกร่อง');
+  await page.click('#langEn');
+  await page.selectOption('#routeMode', 'off');
+  await expect(page.locator('#routeProfile')).toBeDisabled();
+  await expect(page.locator('#routeProfileHint')).toHaveText('');
+  expect(errors).toEqual([]);
+});
+
 test('a route too thin for the grid still reaches the print, and says so', async ({ page }) => {
   const errors = await setup(page);
   await installFixture(page, { samples: 60 });

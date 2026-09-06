@@ -88,9 +88,38 @@ outside those bounds are clamped by the geometry, not just the sliders. The defa
 The sliders carry one shared value across modes rather than a per-mode default, so a
 route keeps its size when you switch between inlay, emboss, engrave, and full depth.
 Depth is a magnitude: emboss raises the ridge by it, engrave and inlay cut down by it.
-Full-depth routes reach the print bottom by definition, so depth is disabled there and
-clearance takes over — the channel is the route width plus twice the clearance, which
-is the assembly play, and worth tuning to your printer.
+A rounded full-depth route reaches the print bottom by definition, so depth is disabled
+there and clearance takes over — the channel is the route width plus twice the clearance,
+which is the assembly play, and worth tuning to your printer. The flat profile below
+gives depth a meaning for that mode too.
+
+## Route profile
+
+**Rounded groove** is the original cross-section: a parabola, deepest on the centreline
+and rising to nothing at the edges. It looks right, but the red part it produces has a
+curved underside, so it meets the bed along a line rather than a face — it tips, and
+the flanks want supports.
+
+**Flat floor** cuts the same depth with a flat bottom and a short chamfered wall
+instead. The inlay insert needs no separate treatment for this: its underside already
+follows the grooved surface, so flattening the groove makes the insert an even ribbon
+with a real contact patch. Print it flat side down with supports off.
+
+For the full-depth route the flat profile does something more: instead of cutting to
+the print bottom, the channel stops at a single horizontal plane one depth below the
+lowest ground the route crosses. The base slab stays solid under the route, and the
+plug that drops in has a genuinely planar underside. That plane is measured over the
+corners of every cell the channel touches, not just the channel's own vertices —
+terrain is linear across a cell, so a cliff beside the route can put an interpolated
+channel edge well below any vertex in it, and a floor above that edge would fold the
+pocket wall back through itself. Where the depth would leave less than 1 mm of slab,
+the route falls back to the full-depth cut rather than printing a floor too thin to
+hold.
+
+Rounded is the default, and every model built without choosing a profile is
+byte-identical to what it was before the option existed. The flat profile also writes
+`enable_support = 0` into the Bambu 3MF, so a preset with supports on cannot fill the
+channel with the very structures the profile removes the need for.
 
 The route is stamped by testing the elevation grid's vertices, so a route thinner than
 the vertex spacing has nothing to land on. Rather than dropping it — which cost the print
