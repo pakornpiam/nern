@@ -847,10 +847,21 @@ test('a selection far past the old ceiling fans out into tiled requests', async 
 
 test('a tile that fails leaves a gap the details panel names, not a dead build', async ({ page }) => {
   const errors = await setup(page);
-  let calls = 0;
+  let calls = 0, dead = null, mode = 'dead';
+  const seen = new Map();
+  const down = route => route.fulfill({ status: 504, contentType: 'text/plain', body: 'gateway timeout' });
   await page.route('https://overpass-api.de/api/interpreter', async route => {
     calls++;
-    if (calls === 1) return route.fulfill({ status: 504, contentType: 'text/plain', body: 'gateway timeout' });
+    const body = decodeURIComponent(route.request().postData() || '');
+    const bbox = (body.match(/\((-?[\d.]+),(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)\)/) || [''])[0];
+    if (mode === 'dead') {
+      // One tile is down for good. A merely transient one would now be retried away.
+      if (dead === null) dead = bbox;
+      if (bbox === dead) return down(route);
+    } else {
+      const n = (seen.get(bbox) || 0) + 1; seen.set(bbox, n);
+      if (n === 1) return down(route);   // every tile stumbles once
+    }
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ elements: LAND_PATCHES }) });
   });
   await installFixture(page, { water: true });
@@ -866,11 +877,16 @@ test('a tile that fails leaves a gap the details panel names, not a dead build',
   expect(await page.evaluate(() => state.model.landcoverInfo.status)).toBe('partial');
   await expect(page.locator('#detailNotes')).toContainText('Land-type data is incomplete');
   await expect(page.locator('#detailNotes')).toContainText('1 of');
-  // A gap is not cached, so the next Generate really does go back for it.
+  // A gap is not cached, so the next Generate really does go back for it -- and this time
+  // every tile only stumbles, which the retry now carries through instead of losing land.
   const before = calls;
+  mode = 'flaky';
   await page.click('#generate');
   await expect(page.locator('#exportOne')).toBeEnabled();
   expect(calls).toBeGreaterThan(before);
+  await expect.poll(() => page.evaluate(() => state.model.landcoverInfo.missing)).toBe(0);
+  expect(await page.evaluate(() => state.model.landcoverInfo.status)).toBe('ok');
+  await expect(page.locator('#detailNotes')).not.toContainText('Land-type data is incomplete');
   expect(errors).toEqual([]);
 });
 

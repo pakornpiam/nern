@@ -177,9 +177,13 @@ of roughly 1,000 km² and run two at a time, which is what the public service al
 address. A full 120 × 120 km selection is sixteen requests and takes appreciably longer
 than a small one; the progress overlay counts them off.
 
-If a tile fails, its ground is simply missing rather than the whole build dying: the
-model is made from the tiles that answered and the details panel says how many are
-absent. Gaps are never cached, so pressing Generate again really does go back for them.
+A tile that is rate-limited or stumbles is retried twice with a growing pause, since
+public Overpass turns requests away as a matter of course and one lost tile would take a
+whole rectangle of ground with it. A tile that hits the server's own query timeout still
+returns most of what it gathered, and that part is kept. If a tile genuinely does not
+finish, its ground is simply missing rather than the whole build dying: the model is made
+from what arrived and the details panel says how many requests fell short. Gaps are never
+cached, so pressing Generate again really does go back for them.
 
 Two things get dropped at scale, both deliberately. Mapped areas smaller than one
 terrain cell cannot be drawn at any detail setting, so they are discarded before they

@@ -99,15 +99,24 @@
           if (el.tags?.type !== 'multipolygon') continue;
           const members = (el.members || []).filter(m => m.type === 'way');
           const outer = stitch(members.filter(m => !m.role || m.role === 'outer').map(m => m.geometry));
-          const inner = stitch(members.filter(m => m.role === 'inner').map(m => m.geometry));
           if (!outer.length) throw fail('invalid');
           polygons = outer.map(r => [r]);
+          // A bad hole is not worth the whole feature -- one unclosable inner ring used to
+          // discard every outer ring with it, losing a forest to a clearing. Same tolerance
+          // buildings.js already applies to its own orphan holes.
+          let inner = [];
+          try { inner = stitch(members.filter(m => m.role === 'inner').map(m => m.geometry)); }
+          catch (e) { if (e.code !== 'invalid') throw e; invalid++; }
           for (const hole of inner) {
             const owner = polygons.find(p => root.TopoBuildings.inPolygon(hole[0], p));
-            if (!owner) throw fail('invalid');
-            owner.push(hole);
+            if (owner) owner.push(hole); else invalid++;
           }
-          for (const m of members) consumed.add(`way/${m.ref}`);
+          /* Only the outer ring is this relation's own outline. An inner member is a hole,
+             and in the standard OSM idiom it carries its own tag -- a meadow or scrub
+             clearing inside a wood -- so consuming it left that ground painted by nobody:
+             punched out of the forest and then skipped in its own right. An untagged inner
+             way needs no protection, since it is dropped anyway when its turn comes. */
+          for (const m of members) if (!m.role || m.role === 'outer') consumed.add(`way/${m.ref}`);
         } else polygons = stitch([el.geometry]).map(r => [r]);
         const bbox = [Infinity, Infinity, -Infinity, -Infinity];
         for (const poly of polygons) for (const ring of poly) for (const [x, y] of ring) {
@@ -133,18 +142,47 @@
     ]);
     return boxes;
   }
+  const backoff = attempt => new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+  /* Public Overpass rate-limits and times out as a matter of course, and one tile lost to a
+     transient 429 takes a whole rectangle of ground with it -- half the map on a two-tile
+     selection, and nothing about the result says which half. Same retry ladder as
+     TopoTerrain.request, with a longer wait: these are queue slots, not static tiles. */
   async function requestBox(box, fetcher, signal) {
     const [[s, west], [n, east]] = box, bbox = `${s},${west},${n},${east}`;
     const filters = ['natural~"^(wood|grassland|scrub|heath|glacier|snowfield)$"', 'landuse~"^(forest|grass|meadow|farmland|orchard|vineyard|allotments)$"'];
     const query = `[out:json][timeout:25];(${filters.flatMap(f => ['way', 'relation'].map(type => `${type}[${f}](${bbox});`)).join('')});out geom;`;
-    const response = await fetcher('https://overpass-api.de/api/interpreter', {
-      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query),
-      signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(35000)]),
-    });
-    if (!response.ok) throw fail('errLandcoverFetch');
-    const data = await response.json();
-    if (data.remark || !Array.isArray(data.elements)) throw fail('errLandcoverFetch');
-    return data.elements;
+    for (let attempt = 0; ; attempt++) {
+      abort(signal);
+      const last = attempt >= 2;
+      let data;
+      try {
+        const response = await fetcher('https://overpass-api.de/api/interpreter', {
+          method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query),
+          signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(35000)]),
+        });
+        // 429 is a busy slot and 5xx a stumble; a 400 means the query itself is wrong and
+        // will be just as wrong next time.
+        if (!response.ok) {
+          if (last || !(response.status === 429 || response.status >= 500)) throw fail('errLandcoverFetch');
+          await backoff(attempt); continue;
+        }
+        data = await response.json();
+      } catch (e) {
+        abort(signal);
+        if (last || e.code === 'errLandcoverFetch') throw fail('errLandcoverFetch');
+        await backoff(attempt); continue;   // network error or client timeout
+      }
+      if (!Array.isArray(data.elements)) throw fail('errLandcoverFetch');
+      /* A server-side timeout answers 200 with a remark AND the elements it did manage to
+         collect -- often most of them. Discarding that was throwing away a usable answer.
+         Keep it and let the caller report the tile as incomplete; only retry when the
+         remark came with nothing at all. */
+      if (data.remark && !data.elements.length) {
+        if (last) throw fail('errLandcoverFetch');
+        await backoff(attempt); continue;
+      }
+      return { elements: data.elements, complete: !data.remark };
+    }
   }
   async function fetchLandcover(bounds, { signal, enabled = true, fetcher = fetch, onProgress } = {}) {
     abort(signal);
@@ -166,19 +204,24 @@
        one tile emit a multipolygon's member ways standalone while another emits the
        relation, painting the same ground twice. */
     const merged = new Map();
-    let missing = 0, done = 0;
+    // Separate counts: a tile that answered partially still contributed ground, so it must
+    // not count towards "every tile failed", but the user is still owed the warning.
+    let failed = 0, truncated = 0, done = 0;
     try {
       await root.TopoTerrain.pool(boxes, async box => {
         try {
-          for (const el of await requestBox(box, fetcher, signal)) merged.set(`${el.type}/${el.id}`, el);
+          const { elements, complete } = await requestBox(box, fetcher, signal);
+          for (const el of elements) merged.set(`${el.type}/${el.id}`, el);
+          if (!complete) truncated++;
         } catch (e) {
           abort(signal);   // a cancelled build is not a missing tile
-          missing++;
+          failed++;
         }
         onProgress?.(++done, boxes.length);
       }, signal, TILE_CONCURRENCY);
       abort(signal);
-      if (missing === boxes.length) throw fail('errLandcoverFetch');
+      const missing = failed + truncated;
+      if (failed === boxes.length) throw fail('errLandcoverFetch');
       const result = normalize([...merged.values()], cellSpan(bounds));
       abort(signal);
       result.tiles = boxes.length; result.missing = missing;
