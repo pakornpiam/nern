@@ -23,7 +23,10 @@ async function installFixture(page, opts = {}) {
       const wantWater = input.waterEnabled !== false;
       return { ...src, waterFetched: wantWater,
         osmWater: wantWater ? src.osmWater : new Uint8Array(src.osmWater.length),
-        buildings: input.includeBuildings ? src.buildings : { features: [], status: 'off' } };
+        buildings: input.includeBuildings ? src.buildings : { features: [], status: 'off' },
+        // Land types are fetched exactly as the real one does, so the Overpass route
+        // installed by a test is what decides whether a request happens at all.
+        landcover: await TopoLandcover.fetchLandcover(src.bounds, { signal, enabled: input.colorMode === 'landcover' }) };
     };
     $('nx').value = opts.nx || 1;
   }, { src: serial, opts });
@@ -516,5 +519,199 @@ test('re-enabling water on a model generated without it asks for a regenerate', 
   expect(await page.evaluate(() => state.model.src.waterFetched)).toBe(true);
   expect(await page.evaluate(() => [state.bands.nb, state.model.hasWater])).toEqual([3, true]);
   await expect(page.locator('#waterRow')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+/* Land cover replaces the elevation bands with four mapped materials. The fixture
+   paints the west half wood and the east half farmland; the source's own water mask
+   already claims the western third, so all four categories are in play. */
+const LAND_PATCHES = [
+  { type: 'way', id: 1, tags: { natural: 'wood' }, bbox: [0, 0, 0.001, 0.002] },
+  { type: 'way', id: 2, tags: { landuse: 'farmland' }, bbox: [0.001, 0, 0.002, 0.002] },
+].map(({ bbox: [x0, y0, x1, y1], ...rest }) => ({ ...rest,
+  geometry: [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]].map(([lon, lat]) => ({ lon, lat })) }));
+
+async function routeLandcover(page, counter = {}) {
+  counter.calls = 0;
+  await page.route('https://overpass-api.de/api/interpreter', async route => {
+    counter.calls++;
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ elements: LAND_PATCHES }) });
+  });
+  return counter;
+}
+
+test('real land types replace the elevation bands with four mapped materials', async ({ page }) => {
+  const errors = await setup(page);
+  const overpass = await routeLandcover(page);
+  await installFixture(page, { water: true });
+
+  // Before any model exists the panel says where the data will come from.
+  await page.selectOption('#colorMode', 'landcover');
+  await expect(page.locator('#landcoverColors')).toBeVisible();
+  await expect(page.locator('#elevationColors')).toBeHidden();
+  await expect(page.locator('#waterAutoRow')).toBeHidden();
+  await expect(page.locator('#landcoverStatus')).toContainText('Generate or select this mode');
+  // Four even quarters rather than the band gradient's water slice plus cuts.
+  expect(await page.evaluate(() => $('legend').style.background)).toContain('25%');
+
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  expect(overpass.calls).toBe(1);
+  const built = await page.evaluate(() => ({
+    categories: Object.keys(state.model.materialMeshes[0].materials),
+    filled: Object.entries(state.model.materialMeshes[0].materials).filter(([, m]) => m.pos.length).map(([c]) => c),
+    info: state.model.landcoverInfo,
+    // The terrain mesh itself is untouched: STL exports still carry whole pieces.
+    pieceTris: state.model.pieces[0].pos.length / 9,
+  }));
+  expect(built.categories).toEqual(['water', 'forest', 'grass', 'other']);
+  expect(built.filled).toEqual(['water', 'forest', 'grass', 'other']);
+  expect(built.info.status).toBe('ok');
+  expect(built.info.vegetationPercent).toBeGreaterThan(0);
+  expect(built.pieceTris).toBeGreaterThan(0);
+  await expect(page.locator('#landcoverStatus')).toContainText('OSM mapped vegetation');
+  await expect(page.locator('#detailNotes')).toContainText('OSM mapped vegetation');
+
+  // Recolouring is a preview repaint, not a rebuild: no worker run, no fetch.
+  await page.evaluate(() => { window.buildsBefore = state.model; });
+  await page.locator('#landForest').fill('#123456');
+  await page.locator('#landForest').dispatchEvent('input');
+  expect(await page.evaluate(() => state.model === window.buildsBefore)).toBe(true);
+  expect(await page.evaluate(() => state.model.materialColors.forest)).toBe('#123456');
+  expect(overpass.calls).toBe(1);
+
+  // The Bambu terrain plate carries the four materials, one object per category.
+  const bambu = await page.evaluate(async () => {
+    const files = await buildBambuFiles(state.model);
+    const archive = await JSZip.loadAsync(files.terrainBlob);
+    const xml = await archive.file('3D/3dmodel.model').async('string');
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    return { xmlErrors: doc.querySelectorAll('parsererror').length,
+      materials: [...doc.querySelectorAll('base')].map(b => b.getAttribute('name')),
+      colors: [...doc.querySelectorAll('base')].map(b => b.getAttribute('displaycolor')),
+      readme: await (async () => { const zip = new JSZip(); addModelStls(zip, state.model);
+        return zip.file('README.txt').async('string'); })() };
+  });
+  expect(bambu.xmlErrors).toBe(0);
+  expect(bambu.materials).toEqual(['water', 'forest', 'grass', 'other']);
+  expect(bambu.colors[1]).toBe('#123456FF');
+  expect(bambu.readme).toContain('OpenStreetMap contributors');
+
+  // Switching back restores the bands, and the cached source needs no new request.
+  await page.selectOption('#colorMode', 'elevation');
+  await expect(page.locator('#elevationColors')).toBeVisible();
+  await expect(page.locator('#landcoverColors')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => !!state.model?.zCuts && !state.model.materialMeshes)).toBe(true);
+  await expect(page.locator('#waterRow')).toBeVisible();
+  expect(overpass.calls).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test('a land-type lookup that fails keeps the previous model and can be retried', async ({ page }) => {
+  const errors = await setup(page);
+  const overpass = { calls: 0 };
+  let fail = true;
+  await page.route('https://overpass-api.de/api/interpreter', async route => {
+    overpass.calls++;
+    if (fail) return route.fulfill({ status: 504, contentType: 'text/plain', body: 'gateway timeout' });
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ elements: LAND_PATCHES }) });
+  });
+  await installFixture(page, { water: true });
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  await page.evaluate(() => { window.bandModel = state.model; });
+
+  await page.selectOption('#colorMode', 'landcover');
+  await expect(page.locator('#status')).toHaveClass('err');
+  await expect(page.locator('#status')).toContainText('Press Generate to retry');
+  // The banded model is left intact rather than half-converted.
+  expect(await page.evaluate(() => state.model === window.bandModel)).toBe(true);
+  expect(await page.evaluate(() => !!state.model.materialMeshes)).toBe(false);
+
+  fail = false;
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  expect(await page.evaluate(() => state.model.landcoverInfo.status)).toBe('ok');
+  expect(overpass.calls).toBeGreaterThan(1);
+  expect(errors).toEqual([]);
+});
+
+test('switching to land types on a water-free source fetches the rings it now needs', async ({ page }) => {
+  // Land types restores its own water settings, which default to the layer ON. A
+  // source generated with water off carries no rings, so the rebuild has to go and
+  // get them rather than colouring the lake as ordinary ground.
+  const errors = await setup(page);
+  const calls = { land: 0, water: 0 };
+  await page.route('https://overpass-api.de/api/interpreter', async route => {
+    const body = decodeURIComponent(route.request().postData() || '');
+    if (body.includes('landuse')) {
+      calls.land++;
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ elements: LAND_PATCHES }) });
+    }
+    calls.water++;
+    // Cover the western third of whatever bbox was actually asked for.
+    const [, s, w, n, e] = body.match(/\((-?[\d.]+),(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)\)/).map(Number);
+    const lonE = w + (e - w) / 3;
+    const ring = [[w, s], [lonE, s], [lonE, n], [w, n], [w, s]].map(([lon, lat]) => ({ lon, lat }));
+    return route.fulfill({ contentType: 'application/json',
+      body: JSON.stringify({ elements: [{ type: 'way', id: 7, tags: { natural: 'water' }, geometry: ring }] }) });
+  });
+  await installFixture(page, { water: true });
+  await page.locator('#waterEnabled').uncheck();
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  expect(await page.evaluate(() => state.model.src.waterFetched)).toBe(false);
+  expect(calls.water).toBe(0);
+
+  await page.selectOption('#colorMode', 'landcover');
+  await expect.poll(() => page.evaluate(() => !!state.model.materialMeshes)).toBe(true);
+  expect(await page.evaluate(() => $('waterEnabled').checked)).toBe(true);
+  expect(await page.evaluate(() => state.model.src.waterFetched)).toBe(true);
+  expect(calls.water).toBe(1);
+  // The lake reached the print as its own material rather than as other ground.
+  expect(await page.evaluate(() => state.model.materialMeshes[0].materials.water.pos.length)).toBeGreaterThan(0);
+  expect(errors).toEqual([]);
+});
+
+test('an area past the land-type ceiling hands the colour picker back to the bands', async ({ page }) => {
+  // Area and vertex ceilings cannot be retried away, so the picker must not stay on
+  // a mode the model can never reach — it would block every later Generate too.
+  const errors = await setup(page);
+  const overpass = await routeLandcover(page);
+  await installFixture(page, { water: true });
+  await page.locator('#areaX').fill('40'); await page.locator('#areaX').dispatchEvent('change');
+  await page.locator('#areaY').fill('40'); await page.locator('#areaY').dispatchEvent('change');
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  await page.evaluate(() => { window.bandModel = state.model; });
+
+  await page.selectOption('#colorMode', 'landcover');
+  await expect(page.locator('#status')).toContainText('up to 1,000 km²');
+  // Refused before any request went out, and the picker is back on the bands.
+  expect(overpass.calls).toBe(0);
+  await expect(page.locator('#colorMode')).toHaveValue('elevation');
+  await expect(page.locator('#elevationColors')).toBeVisible();
+  await expect(page.locator('#landcoverColors')).toBeHidden();
+  await expect(page.locator('#waterRow')).toBeVisible();
+  expect(await page.evaluate(() => state.colorMode)).toBe('elevation');
+  // The legend describes the banded model on screen, not four land types.
+  expect(await page.evaluate(() => $('legend').style.background)).toContain('rgb(59, 123, 212)');
+  expect(await page.evaluate(() => state.model === window.bandModel)).toBe(true);
+
+  // And Generate still works, rather than repeating the same refusal forever.
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  await expect(page.locator('#status')).not.toContainText('up to 1,000 km²');
+  expect(await page.evaluate(() => state.model.opts.colorMode)).toBe('elevation');
+
+  // Shrink back and the mode is available again, with its own water settings.
+  await page.locator('#areaX').fill('0.5'); await page.locator('#areaX').dispatchEvent('change');
+  await page.locator('#areaY').fill('0.5'); await page.locator('#areaY').dispatchEvent('change');
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  await page.selectOption('#colorMode', 'landcover');
+  await expect.poll(() => page.evaluate(() => !!state.model.materialMeshes)).toBe(true);
+  await expect(page.locator('#colorMode')).toHaveValue('landcover');
+  expect(overpass.calls).toBe(1);
   expect(errors).toEqual([]);
 });

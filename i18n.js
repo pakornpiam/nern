@@ -16,6 +16,17 @@
   'use strict';
 
   const en = {
+    lblColorMode: 'Color mode', modeElevation: 'Elevation bands', modeLandcover: 'Real land types',
+    landWater: 'Water', landForest: 'Forest', landGrass: 'Grass / farmland', landOther: 'Other ground / buildings',
+    hintLandcover: 'Mapped land types form a 0.8 mm surface over the other-ground color. Unmapped ground and buildings use that color too. Detail controls the smallest mapped features shown.',
+    landcoverPending: 'Generate or select this mode to load OpenStreetMap land areas.',
+    landcoverCoverage: 'OSM mapped vegetation: {n}% of selected terrain cells (after water). Invalid features skipped: {skipped}.',
+    landcoverEmpty: 'No mapped vegetation was found. Unmapped ground uses the other-ground color; it is not verified bare land.',
+    pgLandcover: 'Loading mapped land types…', pgLandcoverGeometry: 'Building colored surfaces {done}/{total}…',
+    errLandcoverFetch: 'Land-type mapping could not be loaded completely. Your previous model is kept. Press Generate to retry.',
+    errLandcoverArea: 'Real land types supports up to 1,000 km² per model. Select a smaller area or use elevation bands.',
+    errLandcoverLimit: 'This area has too much land-type geometry (10,000 features or 200,000 vertices). Select a smaller area or use elevation bands.',
+    readmeLandcover: 'Land types: © OpenStreetMap contributors, ODbL (https://www.openstreetmap.org/copyright). Forest and grass/farmland are mapped areas, not satellite colors. Other ground includes unmapped areas and buildings. Colors occupy the upper 0.8 mm vertically, preserving at least 1 mm of base; low areas can have a thinner color layer. Boundaries follow terrain cells and may omit sub-cell features. Water uses the enabled water mask. Four terrain materials: water, forest, grass, other. Routes and optional frames retain separate materials.',
     /* ---- document + brand ---- */
     pageTitle: 'TopoPuzzle — 3D-Printable Topographic Puzzles of Anywhere on Earth',
     tagline: 'Turn any place on Earth into an interlocking, 3D-printable topographic puzzle. Pick a spot, generate the terrain, export STL pieces.',
@@ -263,6 +274,17 @@
        frame plate-> ถาดกรอบ          terrain -> ภูมิประเทศ
      Units are written in Thai abbreviations (มม. = mm, กม. = km). */
   const th = {
+    lblColorMode: 'โหมดสี', modeElevation: 'แถบตามระดับความสูง', modeLandcover: 'ประเภทพื้นที่จริง',
+    landWater: 'น้ำ', landForest: 'ป่า', landGrass: 'ทุ่งหญ้า / พื้นที่เกษตร', landOther: 'พื้นที่อื่น / อาคาร',
+    hintLandcover: 'ประเภทพื้นที่บนแผนที่เป็นชั้นสีผิวหนา 0.8 มม. บนฐานสีพื้นที่อื่น พื้นที่ที่ไม่มีข้อมูลและอาคารใช้สีพื้นที่อื่นด้วย ความละเอียดกำหนดขนาดพื้นที่เล็กที่สุดที่แสดงได้',
+    landcoverPending: 'สร้างโมเดลหรือเลือกโหมดนี้เพื่อโหลดประเภทพื้นที่จาก OpenStreetMap',
+    landcoverCoverage: 'พืชพรรณที่มีข้อมูล OSM: {n}% ของช่องภูมิประเทศที่เลือก (หลังหักพื้นที่น้ำ) ข้ามข้อมูลรูปทรงที่ไม่ถูกต้อง: {skipped}',
+    landcoverEmpty: 'ไม่พบข้อมูลพื้นที่พืชพรรณ พื้นที่ที่ไม่มีข้อมูลใช้สีพื้นที่อื่น ไม่ได้ยืนยันว่าเป็นพื้นที่โล่ง',
+    pgLandcover: 'กำลังโหลดประเภทพื้นที่…', pgLandcoverGeometry: 'กำลังสร้างชั้นสีผิว {done}/{total}…',
+    errLandcoverFetch: 'โหลดข้อมูลประเภทพื้นที่ได้ไม่ครบ เก็บโมเดลเดิมไว้แล้ว กดสร้างเพื่อลองอีกครั้ง',
+    errLandcoverArea: 'โหมดประเภทพื้นที่จริงรองรับสูงสุด 1,000 ตร.กม. ต่อโมเดล เลือกพื้นที่เล็กลงหรือใช้แถบตามระดับความสูง',
+    errLandcoverLimit: 'พื้นที่นี้มีข้อมูลมากเกินไป (10,000 รูปทรง หรือ 200,000 จุด) เลือกพื้นที่เล็กลงหรือใช้แถบตามระดับความสูง',
+    readmeLandcover: 'ประเภทพื้นที่: © OpenStreetMap contributors, ODbL (https://www.openstreetmap.org/copyright) ป่าและทุ่งหญ้า/พื้นที่เกษตรอ้างอิงแผนที่ ไม่ใช่สีภาพดาวเทียม พื้นที่อื่นรวมพื้นที่ที่ไม่มีข้อมูลและอาคาร สีอยู่บนผิวหนา 0.8 มม. ในแนวดิ่ง โดยเหลือฐานอย่างน้อย 1 มม. พื้นที่ต่ำอาจมีชั้นสีบางกว่า ขอบเขตอิงช่องภูมิประเทศและอาจไม่แสดงส่วนที่เล็กกว่าช่อง น้ำใช้ข้อมูลน้ำเมื่อเปิดใช้งาน วัสดุภูมิประเทศสี่ชนิดคือน้ำ ป่า ทุ่งหญ้า และพื้นที่อื่น เส้นทางและกรอบยังใช้วัสดุแยกตามเดิม',
     pageTitle: 'TopoPuzzle — จิ๊กซอว์ภูมิประเทศ 3 มิติ พิมพ์ได้จากทุกที่บนโลก',
     tagline: 'เปลี่ยนสถานที่ใดก็ได้บนโลกให้เป็นจิ๊กซอว์ภูมิประเทศแบบต่อประกบ พิมพ์ 3 มิติได้ เลือกจุดที่ต้องการ สร้างภูมิประเทศ แล้วส่งออกเป็นชิ้นส่วน STL',
 
