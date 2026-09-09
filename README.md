@@ -141,9 +141,18 @@ covers most of a 300 m cell but misses its centre disappears entirely, and a sca
 of survivors reads as noise. A spread of one or two usually turns that back into
 recognisable country.
 
+Each land type has its own value, because they are not mapped to the same standard.
+Forest is drawn carefully in most of the world and farmland barely at all in much of it,
+so the spread that rescues a fragmented wood will smear farmland across ground that has
+none — and a glacier, mapped from survey data, usually wants no spread whatever. Set them
+independently and watch the preview.
+
 It is measured in cells rather than metres because the growth is per cell either way —
 a metre value would round to nothing at exactly the coarse detail this exists for. The
 details panel reports the cell size, so read the two together.
+
+Where two types would claim the same cell the lower one in the list wins, the same
+precedence overlapping polygons get, so a larger number does not always reach further.
 
 Two things it deliberately will not do. It never spreads water, because the water mask is
 measured rather than guessed and growing it would move a real shoreline; growth only ever
