@@ -38,7 +38,9 @@ function solidSoup(api, solid) {
 
 export async function buildLandcover(model, terrainPieces, progress = () => {}) {
   const api = await kernel(), g = model.grid, data = model.src.landcover;
-  if (!data || !['ok', 'empty'].includes(data.status)) throw new Error('errLandcoverFetch');
+  // 'partial' means some map requests failed; the model is built from what arrived and
+  // detailNotes names the gap, rather than throwing away the tiles that did come back.
+  if (!data || !['ok', 'empty', 'partial'].includes(data.status)) throw new Error('errLandcoverFetch');
   const { CODE, OTHER, CATEGORIES } = TopoLandcover;
   const cells = TopoLandcover.classify(data, model.src.bounds, g.W, g.D);
   const water = model.waterOff ? null : TopoGeometry.buildCapCellMask(g.water, g.W, g.D, g.VW);
@@ -69,7 +71,8 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
   const pct = n => (selected ? 100 * n / selected : 0);
   model.landcoverInfo = { status: data.status, invalid: data.invalid,
     vegetationPercent: pct(counts[CODE.forest] + counts[CODE.grass]),
-    snowPercent: pct(counts[CODE.snow]), hasSnow: counts[CODE.snow] > 0, snowLineM: snowLine };
+    snowPercent: pct(counts[CODE.snow]), hasSnow: counts[CODE.snow] > 0, snowLineM: snowLine,
+    missing: data.missing || 0, tiles: data.tiles || 1 };
   model.materialMeshes = [];
   const owned = [], own = x => { owned.push(x); return x; };
   try {

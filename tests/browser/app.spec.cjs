@@ -690,14 +690,23 @@ test('an area past the land-type ceiling hands the colour picker back to the ban
   const errors = await setup(page);
   const overpass = await routeLandcover(page);
   await installFixture(page, { water: true });
-  await page.locator('#areaX').fill('40'); await page.locator('#areaX').dispatchEvent('change');
-  await page.locator('#areaY').fill('40'); await page.locator('#areaY').dispatchEvent('change');
   await page.click('#generate');
   await expect(page.locator('#exportOne')).toBeEnabled();
   await page.evaluate(() => { window.bandModel = state.model; });
+  /* The ceiling now sits above anything the area box can draw, so it is only reachable
+     through an unclamped region selection. What this test is really about is the UI's
+     reaction to a closed error, so raise one directly; the ceiling arithmetic itself is
+     covered in tests/landcover.test.cjs. */
+  await page.evaluate(() => {
+    window.realFetchLandcover = TopoLandcover.fetchLandcover;
+    TopoLandcover.fetchLandcover = async (bounds, opts = {}) => {
+      if (opts.enabled === false) return window.realFetchLandcover(bounds, opts);
+      const e = new Error('errLandcoverArea'); e.code = 'errLandcoverArea'; throw e;
+    };
+  });
 
   await page.selectOption('#colorMode', 'landcover');
-  await expect(page.locator('#status')).toContainText('up to 1,000 km²');
+  await expect(page.locator('#status')).toContainText('up to 15,000 km²');
   // Refused before any request went out, and the picker is back on the bands.
   expect(overpass.calls).toBe(0);
   await expect(page.locator('#colorMode')).toHaveValue('elevation');
@@ -712,12 +721,11 @@ test('an area past the land-type ceiling hands the colour picker back to the ban
   // And Generate still works, rather than repeating the same refusal forever.
   await page.click('#generate');
   await expect(page.locator('#exportOne')).toBeEnabled();
-  await expect(page.locator('#status')).not.toContainText('up to 1,000 km²');
+  await expect(page.locator('#status')).not.toContainText('up to 15,000 km²');
   expect(await page.evaluate(() => state.model.opts.colorMode)).toBe('elevation');
 
-  // Shrink back and the mode is available again, with its own water settings.
-  await page.locator('#areaX').fill('0.5'); await page.locator('#areaX').dispatchEvent('change');
-  await page.locator('#areaY').fill('0.5'); await page.locator('#areaY').dispatchEvent('change');
+  // With the ceiling out of the way the mode is available again, with its own settings.
+  await page.evaluate(() => { TopoLandcover.fetchLandcover = window.realFetchLandcover; });
   await page.click('#generate');
   await expect(page.locator('#exportOne')).toBeEnabled();
   await page.selectOption('#colorMode', 'landcover');
@@ -803,5 +811,59 @@ test('the snow line paints by altitude without going back to the network', async
   await expect(page.locator('#landSnowRow')).toBeHidden();
   expect(await page.evaluate(() => state.model.opts.snowLineM)).toBe(null);
   expect(overpass.calls).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test('a selection far past the old ceiling fans out into tiled requests', async ({ page }) => {
+  // 120 x 120 km is the largest box the area controls allow; it used to be refused
+  // outright at 1,000 km2. The fixture source stays small, so what this pins is the
+  // request fan-out and that the build survives it.
+  const errors = await setup(page);
+  const overpass = await routeLandcover(page);
+  await installFixture(page, { water: true });
+  await page.locator('#areaX').fill('120'); await page.locator('#areaX').dispatchEvent('change');
+  await page.locator('#areaY').fill('120'); await page.locator('#areaY').dispatchEvent('change');
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+
+  await page.selectOption('#colorMode', 'landcover');
+  await expect.poll(() => page.evaluate(() => !!state.model?.materialMeshes)).toBe(true);
+  await expect(page.locator('#colorMode')).toHaveValue('landcover');
+  await expect(page.locator('#status')).not.toContainText('km²');
+  const expected = await page.evaluate(() => TopoLandcover.tileBoxes(state.model.opts.bounds).length);
+  expect(expected).toBeGreaterThan(1);
+  expect(expected).toBeLessThanOrEqual(25);
+  expect(overpass.calls).toBe(expected);
+  expect(await page.evaluate(() => state.model.landcoverInfo.tiles)).toBe(expected);
+  expect(await page.evaluate(() => state.model.landcoverInfo.missing)).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('a tile that fails leaves a gap the details panel names, not a dead build', async ({ page }) => {
+  const errors = await setup(page);
+  let calls = 0;
+  await page.route('https://overpass-api.de/api/interpreter', async route => {
+    calls++;
+    if (calls === 1) return route.fulfill({ status: 504, contentType: 'text/plain', body: 'gateway timeout' });
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ elements: LAND_PATCHES }) });
+  });
+  await installFixture(page, { water: true });
+  await page.locator('#areaX').fill('120'); await page.locator('#areaX').dispatchEvent('change');
+  await page.locator('#areaY').fill('120'); await page.locator('#areaY').dispatchEvent('change');
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+
+  await page.selectOption('#colorMode', 'landcover');
+  await expect.poll(() => page.evaluate(() => !!state.model?.materialMeshes)).toBe(true);
+  // The tiles that answered still produced a model, and the shortfall is stated.
+  expect(await page.evaluate(() => state.model.landcoverInfo.missing)).toBe(1);
+  expect(await page.evaluate(() => state.model.landcoverInfo.status)).toBe('partial');
+  await expect(page.locator('#detailNotes')).toContainText('Land-type data is incomplete');
+  await expect(page.locator('#detailNotes')).toContainText('1 of');
+  // A gap is not cached, so the next Generate really does go back for it.
+  const before = calls;
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  expect(calls).toBeGreaterThan(before);
   expect(errors).toEqual([]);
 });

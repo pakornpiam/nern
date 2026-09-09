@@ -1336,7 +1336,8 @@ const boundsKey = b => b[0][0].toFixed(7) + ',' + b[0][1].toFixed(7) + ',' +
 async function getTerrainSources(opts, onProgress, signal, key) {
   const { bounds, samples, terrainProvider } = opts;
   if (opts.colorMode === 'landcover') onProgress(t('pgLandcover'));
-  const landcover = await TopoLandcover.fetchLandcover(bounds, { signal, enabled: opts.colorMode === 'landcover' });
+  const landcover = await TopoLandcover.fetchLandcover(bounds, { signal, enabled: opts.colorMode === 'landcover',
+    onProgress: (done, total) => onProgress(total > 1 ? t('pgLandcoverTiles', { done, total }) : t('pgLandcover')) });
   const bKey = boundsKey(bounds);
   const sKey = Array.isArray(samples) ? samples.join('x') : String(samples);
   const eKey = terrainProvider + '|' + bKey + '|' + sKey;
@@ -1739,7 +1740,8 @@ async function rebuildGeometryNow() {
       let src = old.src;
       if (opts.colorMode === 'landcover' && !['ok', 'empty'].includes(src.landcover?.status)) {
         overlay(true, t('pgLandcover'));
-        src = { ...src, landcover: await TopoLandcover.fetchLandcover(opts.bounds, { signal: controller.signal }) };
+        src = { ...src, landcover: await TopoLandcover.fetchLandcover(opts.bounds, { signal: controller.signal,
+          onProgress: (done, total) => { if (total > 1) overlay(true, t('pgLandcoverTiles', { done, total })); } }) };
       }
       if (opts.waterEnabled && src.waterFetched === false) {
         const bKey = boundsKey(opts.bounds);
@@ -2829,6 +2831,12 @@ function detailNotes(model) {
     const land = model.landcoverInfo;
     notes.push(t('landcoverCoverage', { n: land.vegetationPercent.toFixed(1), skipped: land.invalid || 0 }));
     if (land.snowPercent > 0) notes.push(t('landcoverSnow', { n: land.snowPercent.toFixed(1) }));
+    if (land.missing) notes.push(t('noteLandcoverPartial', { missing: land.missing, total: land.tiles }));
+    /* meshSpacing is already the ground metres per cell. Land types are sampled at cell
+       centres, so past roughly a hectare a wood either claims a whole cell or vanishes —
+       say so rather than letting a large selection look like bad data. */
+    const cell = model.src.terrainInfo?.meshSpacing;
+    if (cell >= 100) notes.push(t('noteLandcoverCoarse', { n: Math.round(cell) }));
     // Says so in the exported README too: a chosen altitude is not measured snow.
     if (Number.isFinite(land.snowLineM)) notes.push(t('readmeSnowLine', { alt: Math.round(land.snowLineM) }));
     if (land.status === 'empty') notes.push(t('landcoverEmpty'));

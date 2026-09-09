@@ -72,7 +72,10 @@ test('land-cover requests skip disabled mode, cache successes and empty results,
 });
 
 test('area, feature and vertex budgets reject oversized data', async () => {
-  await assert.rejects(L.fetchLandcover([[0, 0], [1, 1]], { fetcher: () => { throw new Error('must not fetch'); } }), /errLandcoverArea/);
+  // ~49,000 km2: past the ceiling. A 1x1 degree box is ~12,300 km2 and now goes through.
+  await assert.rejects(L.fetchLandcover([[0, 0], [2, 2]], { fetcher: () => { throw new Error('must not fetch'); } }), /errLandcoverArea/);
+  // Wrapped bounds measure as almost no width, so the area guard alone would pass them.
+  await assert.rejects(L.fetchLandcover([[0, 170], [1, -170]], { fetcher: () => { throw new Error('must not fetch'); } }), /errLandcoverArea/);
   assert.throws(() => L.normalize(Array.from({ length: L.LIMIT + 1 }, (_, i) => forest(i))), /errLandcoverLimit/);
   assert.throws(() => L.normalize([{ ...forest(), geometry: Array(L.MAX_VERTICES + 1).fill({ lon: 0, lat: 0 }) }]), /errLandcoverLimit/);
 });
@@ -178,4 +181,72 @@ test('a mapped glacier reaches the print as its own material', async () => {
   assert.ok(materials.forest.pos.length > 0);
   assert.ok(model.landcoverInfo.hasSnow);
   assert.equal(model.landcoverInfo.snowLineM, null);   // no line: this is OSM data alone
+});
+
+test('a large selection is split into tiles, merged once, and deduplicated', async () => {
+  // 1x1 degree ~ 111 km a side: over the old single-request ceiling, under the new one.
+  const big = [[10, 10], [11, 11]];
+  const boxes = L.tileBoxes(big);
+  assert.ok(boxes.length > 1 && boxes.length <= L.MAX_TILES, `tiles ${boxes.length}`);
+  assert.deepEqual(boxes[0][0], [10, 10]);                       // covers the south-west corner
+  assert.deepEqual(boxes.at(-1)[1], [11, 11]);                   // and the north-east one
+  assert.equal(L.tileBoxes([[1, 1], [1.001, 1.001]]).length, 1); // a small box still asks once
+
+  /* Overpass returns anything INTERSECTING a tile, whole -- so a feature straddling tiles
+     comes back from several. It must survive as one. */
+  let calls = 0;
+  const wide = feature(1, rectangle(10, 10, 11, 11), { natural: 'wood' });
+  const data = await L.fetchLandcover(big, { fetcher: async () => {
+    calls++; return { ok: true, json: async () => ({ elements: [wide] }) };
+  } });
+  assert.equal(calls, boxes.length);
+  assert.equal(data.status, 'ok');
+  assert.equal(data.missing, 0);
+  assert.equal(data.tiles, boxes.length);
+  assert.equal(data.features.length, 1);
+});
+
+test('a failed tile leaves a gap the caller can see, and is never cached', async () => {
+  const big = [[20, 20], [21, 21]];
+  const total = L.tileBoxes(big).length;
+  const wood = id => feature(id, rectangle(20.1, 20.1, 20.2, 20.2), { natural: 'wood' });
+  let calls = 0;
+  const flaky = async () => {
+    calls++;
+    if (calls === 1) throw new Error('overpass 429');
+    return { ok: true, json: async () => ({ elements: [wood(calls)] }) };
+  };
+  const partial = await L.fetchLandcover(big, { fetcher: flaky });
+  assert.equal(partial.status, 'partial');
+  assert.equal(partial.missing, 1);
+  assert.equal(partial.tiles, total);
+  assert.ok(partial.features.length > 0);   // the tiles that answered still count
+
+  // Uncached, so pressing Generate really does go back for the gap.
+  calls = 0;
+  const retry = await L.fetchLandcover(big, { fetcher: async () => {
+    calls++; return { ok: true, json: async () => ({ elements: [wood(1)] }) };
+  } });
+  assert.equal(calls, total);
+  assert.equal(retry.status, 'ok');
+  assert.equal(retry.missing, 0);
+
+  // Every tile failing is a failure, not a gap.
+  await assert.rejects(L.fetchLandcover([[30, 30], [31, 31]], {
+    fetcher: async () => { throw new Error('offline'); },
+  }), /errLandcoverFetch/);
+});
+
+test('features too small for any cell this selection could resolve are dropped', () => {
+  // The threshold follows the BOUNDS, not the chosen detail, so one cached response stays
+  // valid across detail changes. At 1 degree a side the finest cell is ~111 m.
+  const span = L.cellSpan([[40, 40], [41, 41]]);
+  assert.ok(span[0] > 0 && span[1] > 0);
+  const tiny = feature(1, rectangle(40.5, 40.5, 40.5002, 40.5002), { natural: 'wood' });
+  const strip = feature(2, rectangle(40.5, 40.5, 40.9, 40.5002), { natural: 'wood' });
+  const big = feature(3, rectangle(40.2, 40.2, 40.8, 40.8), { natural: 'wood' });
+  const kept = L.normalize([tiny, strip, big], span);
+  assert.deepEqual(kept.features.map(f => f.id), ['way/2', 'way/3']);   // the strip survives
+  // Without a threshold nothing is filtered, which is what every small selection does.
+  assert.equal(L.normalize([tiny, strip, big]).features.length, 3);
 });
