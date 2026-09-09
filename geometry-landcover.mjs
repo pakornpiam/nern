@@ -18,6 +18,37 @@ export function cellRectangles(cells, W, D, kind) {
   rectangles.push(...active.values()); return rectangles;
 }
 
+/* Spread each mapped land type outward by one cell per round. classify() samples cell
+   CENTRES, so a wood covering much of a cell but missing its centre vanishes outright --
+   and a cell is selection width over detail, hundreds of metres on a large selection.
+   This closes the gaps between the fragments that survive. It spreads what OSM mapped; it
+   invents nothing where nothing is mapped. */
+export const MAX_GROW = 5;
+export function growCategories(cells, W, D, rounds, shape, CODE, OTHER) {
+  for (let r = 0; r < rounds; r++) {
+    const src = cells.slice();   // one snapshot per round, so growth advances exactly one cell
+    for (let j = 0; j < D; j++) for (let i = 0; i < W; i++) {
+      const k = j * W + i;
+      // Only unmapped ground is ever written, and never outside the printed footprint --
+      // those cells have to stay OTHER or the merged domain would claim ground the piece
+      // does not have.
+      if (src[k] !== OTHER || !shape[k]) continue;
+      let best = OTHER;
+      /* Water is measured, not guessed: spreading it would move a real shoreline, so it is
+         never a source. Otherwise the lowest code wins, the same precedence classify() uses
+         where polygons overlap. Four neighbours, not eight -- a diagonal step covers 1.41
+         cells and leaves the checkerboards buildCapCellMask has to bridge. */
+      const take = nb => { if (nb > CODE.water && nb < best) best = nb; };
+      if (i > 0) take(src[k - 1]);
+      if (i + 1 < W) take(src[k + 1]);
+      if (j > 0) take(src[k - W]);
+      if (j + 1 < D) take(src[k + W]);
+      if (best < OTHER) cells[k] = best;
+    }
+  }
+  return cells;
+}
+
 const emptyMesh = () => ({ pos: new Float32Array(), nrm: new Float32Array() });
 
 // A category edge that lands exactly on a piece seam leaves zero-thickness flaps in
@@ -69,9 +100,24 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
     counts[cells[k]]++;
   }
   const pct = n => (selected ? 100 * n / selected : 0);
+  const mapped = counts[CODE.snow] + counts[CODE.forest] + counts[CODE.grass];
+  /* Spread AFTER counting, and after water. After counting because the coverage note is
+     quoted as what OSM actually mapped, and growth must not quietly inflate it. After
+     water because growth writes only into unmapped ground, which is what leaves the
+     shoreline exactly where the water mask put it. */
+  const rounds = Math.max(0, Math.min(MAX_GROW, model.opts?.landGrowCells | 0));
+  let colored = null;
+  if (rounds) {
+    growCategories(cells, g.W, g.D, rounds, g.cellShape, CODE, OTHER);
+    colored = 0;
+    for (let k = 0; k < cells.length; k++) {
+      if (g.cellShape[k] && cells[k] !== OTHER && cells[k] !== CODE.water) colored++;
+    }
+  }
   model.landcoverInfo = { status: data.status, invalid: data.invalid,
     vegetationPercent: pct(counts[CODE.forest] + counts[CODE.grass]),
     snowPercent: pct(counts[CODE.snow]), hasSnow: counts[CODE.snow] > 0, snowLineM: snowLine,
+    mappedPercent: pct(mapped), growCells: rounds, coloredPercent: rounds ? pct(colored) : null,
     missing: data.missing || 0, tiles: data.tiles || 1 };
   model.materialMeshes = [];
   const owned = [], own = x => { owned.push(x); return x; };

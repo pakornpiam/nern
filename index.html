@@ -262,6 +262,11 @@
           <input id="snowLine" type="number" min="-500" max="9000" step="10" value="2500" />
         </div>
         <div class="hint" id="hintSnowLine"></div>
+        <!-- Cells, not metres: the growth is per cell either way, and a metre value would
+             round to nothing at exactly the coarse detail this exists for. -->
+        <label class="row" for="landGrow" style="margin-top:8px"><span data-i18n="lblLandGrow">Spread mapped areas</span> <span class="val"><span id="landGrowVal">0</span> <span data-i18n="unitCells">cells</span></span></label>
+        <input id="landGrow" type="range" min="0" max="5" step="1" value="0" />
+        <div class="hint" id="hintLandGrow"></div>
         <div class="hint" data-i18n="hintLandcover">Mapped land types form a 0.8 mm surface over the other-ground color. Unmapped ground and buildings use that color too. Detail controls the smallest mapped features shown.</div>
         <div class="hint" id="landcoverStatus" role="status"></div>
         <div class="hint" id="hintLandcoverSlots"></div>
@@ -408,6 +413,7 @@ const state = {
   colorMode: 'elevation',
   colorSettings: {},
   snowLineM: 2500,  // mirrors #snowLine; metres above sea level, land-type mode only
+  landGrowCells: 0, // mirrors #landGrow; grid cells of spread, land-type mode only
 
   net: { elevation: new Map(), water: new Map() },
   /* Authoritative elevation-band boundaries, in METRES. The model's zCuts are a
@@ -1407,6 +1413,7 @@ const LAND_IDS = TopoLandcover.CATEGORIES.map(c => 'land' + c[0].toUpperCase() +
 const landMode = () => $('colorMode').value === 'landcover';
 const snowActive = () => state.models.some(m => m.opts.colorMode === 'landcover' && m.landcoverInfo?.hasSnow);
 const snowOpts = () => ({ snowLineM: $('snowLineEnabled').checked ? state.snowLineM : null });
+const growOpts = () => ({ landGrowCells: state.landGrowCells });
 /* The one predicate shared by the 3MF exporter, the slot hint and the export overlay:
    a category with no geometry anywhere earns no material and no AMS slot. */
 const usedLandCategories = (model, meshes) => TopoLandcover.CATEGORIES.filter(c =>
@@ -1421,6 +1428,8 @@ function renderColorModeUI() {
   $('snowLineOpts').hidden = !$('snowLineEnabled').checked;
   $('snowLineVal').textContent = String(state.snowLineM);
   $('hintSnowLine').textContent = t('hintSnowLine');
+  $('landGrowVal').textContent = String(state.landGrowCells);
+  $('hintLandGrow').textContent = t('hintLandGrow');
   const models = state.models.filter(m => m.opts.colorMode === 'landcover');
   $('landcoverStatus').textContent = models.length ? models.map(m => t('landcoverCoverage', {
     n: m.landcoverInfo.vegetationPercent.toFixed(1), skipped: m.landcoverInfo.invalid || 0,
@@ -1736,7 +1745,7 @@ async function rebuildGeometryNow() {
     const models = [];
     for (const old of oldModels) {
       const opts = { ...old.opts, colorMode: $('colorMode').value, waterLevelM: state.waterLevelM, waterEnabled: waterOn(),
-        autoFallback: $('waterAuto').checked, flattenWater: flattenOn(), ...routeDimOpts(), ...snowOpts() };
+        autoFallback: $('waterAuto').checked, flattenWater: flattenOn(), ...routeDimOpts(), ...snowOpts(), ...growOpts() };
       let src = old.src;
       if (opts.colorMode === 'landcover' && !['ok', 'empty'].includes(src.landcover?.status)) {
         overlay(true, t('pgLandcover'));
@@ -1795,6 +1804,21 @@ function onSnowLineChange(echo) {
   if (!state.models.length) return;
   scheduleGeometryRebuild(echo ? 0 : 120);
 }
+/* Spreading changes which cells belong to which category, so it changes the CSG domains:
+   a worker rebuild every time, never the cheap recolour path. No network either way -- the
+   Overpass response is already cached and the growth happens in buildLandcover.
+   Out of generationInputs for the same reason #waterLevel and #snowLine are: every id in
+   that list is wired to cancelActiveWork, which would abort this very rebuild. */
+function onGrowChange() {
+  state.landGrowCells = parseInt($('landGrow').value, 10) || 0;
+  $('landGrowVal').textContent = String(state.landGrowCells);
+  if (!landMode() && state.model?.opts.colorMode !== 'landcover') return;
+  if ($('generate').disabled) { scheduleGeometryRebuild(0); return; }
+  if (!state.models.length) return;
+  scheduleGeometryRebuild(120);
+}
+$('landGrow').addEventListener('input', onGrowChange);
+
 $('snowLine').addEventListener('input', () => onSnowLineChange(false));
 $('snowLine').addEventListener('change', () => onSnowLineChange(true));
 $('snowLineEnabled').addEventListener('change', () => onSnowLineChange(true));
@@ -2831,6 +2855,8 @@ function detailNotes(model) {
     const land = model.landcoverInfo;
     notes.push(t('landcoverCoverage', { n: land.vegetationPercent.toFixed(1), skipped: land.invalid || 0 }));
     if (land.snowPercent > 0) notes.push(t('landcoverSnow', { n: land.snowPercent.toFixed(1) }));
+    if (land.growCells) notes.push(t('noteLandcoverSpread', { n: land.growCells,
+      colored: land.coloredPercent.toFixed(1), mapped: land.mappedPercent.toFixed(1) }));
     if (land.missing) notes.push(t('noteLandcoverPartial', { missing: land.missing, total: land.tiles }));
     /* meshSpacing is already the ground metres per cell. Land types are sampled at cell
        centres, so past roughly a hectare a wood either claims a whole cell or vanishes —
@@ -2899,6 +2925,7 @@ async function generate() {
       terrainProvider: $('terrainSource').value,
       colorMode: $('colorMode').value,
       ...snowOpts(),
+      ...growOpts(),
       includeBuildings: $('includeBuildings').checked,
       buildingScale: parseFloat($('buildingScale').value),
       nx: clamp(parseInt($('nx').value, 10) || 1, 1, 8),
