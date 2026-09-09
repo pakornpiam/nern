@@ -39,16 +39,37 @@ function solidSoup(api, solid) {
 export async function buildLandcover(model, terrainPieces, progress = () => {}) {
   const api = await kernel(), g = model.grid, data = model.src.landcover;
   if (!data || !['ok', 'empty'].includes(data.status)) throw new Error('errLandcoverFetch');
+  const { CODE, OTHER, CATEGORIES } = TopoLandcover;
   const cells = TopoLandcover.classify(data, model.src.bounds, g.W, g.D);
   const water = model.waterOff ? null : TopoGeometry.buildCapCellMask(g.water, g.W, g.D, g.VW);
-  let selected = 0, vegetation = 0;
+  /* An altitude the user chose, in metres above sea level -- the same units and the same
+     grid applyWaterLevel compares against. null when the control is off. An embossed
+     route raises Hv before this runs, so a cell within the ridge height of the line can
+     flip to snow: a one-cell fringe along a route lying exactly on it, not a bug. */
+  const snowLine = Number.isFinite(model.opts?.snowLineM) ? model.opts.snowLineM : null;
+  const counts = new Int32Array(CATEGORIES.length);
+  let selected = 0;
   for (let k = 0; k < cells.length; k++) {
-    if (!g.cellShape[k]) { cells[k] = 3; continue; }
+    if (!g.cellShape[k]) { cells[k] = OTHER; continue; }
     selected++;
-    if (water?.[k]) cells[k] = 0;
-    if (cells[k] === 1 || cells[k] === 2) vegetation++;
+    if (snowLine !== null) {
+      const i = k % g.W, j = (k / g.W) | 0;
+      /* The mean of the four corners IS the bilinear height at the cell CENTRE, which is
+         the point classify() tests polygons against -- so the altitude rule answers the
+         same question the OSM rule does. Unconditional rather than only over unmapped
+         ground: a snow line that mapped vegetation could veto comes out moth-eaten
+         wherever OSM draws a treeline. */
+      const h = (g.Hv[j * g.VW + i] + g.Hv[j * g.VW + i + 1] +
+        g.Hv[(j + 1) * g.VW + i] + g.Hv[(j + 1) * g.VW + i + 1]) / 4;
+      if (h >= snowLine) cells[k] = CODE.snow;
+    }
+    if (water?.[k]) cells[k] = CODE.water;   // stamped last, so water always wins
+    counts[cells[k]]++;
   }
-  model.landcoverInfo = { status: data.status, invalid: data.invalid, vegetationPercent: selected ? 100 * vegetation / selected : 0 };
+  const pct = n => (selected ? 100 * n / selected : 0);
+  model.landcoverInfo = { status: data.status, invalid: data.invalid,
+    vegetationPercent: pct(counts[CODE.forest] + counts[CODE.grass]),
+    snowPercent: pct(counts[CODE.snow]), hasSnow: counts[CODE.snow] > 0, snowLineM: snowLine };
   model.materialMeshes = [];
   const owned = [], own = x => { owned.push(x); return x; };
   try {
@@ -64,15 +85,16 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
       });
       return own(own(new api.CrossSection(rings, 'NonZero')).extrude(model.maxZ + 1));
     };
-    const domains = [0, 1, 2].map(kind => domainOf(cells, kind));
+    const domains = Array.from({ length: OTHER }, (_, kind) => domainOf(cells, kind));
     // The leftover is cut with the three categories merged into ONE region, in 2D
     // where the seams between them dissolve. Removing them one at a time — or as a
     // 3D union, which keeps those seams — leaves the leftover touching itself at the
     // vertex where a category edge meets a building wall. A triangle soup cannot
     // record that: reloading it welds the seam shut and swallows its neighbour.
-    const coveredDomain = domainOf(Uint8Array.from(cells, c => (c === 3 ? 3 : 0)), 0);
+    // The 0 here is cellRectangles' kind selector, not the water category -- incidental.
+    const coveredDomain = domainOf(Uint8Array.from(cells, c => (c === OTHER ? OTHER : 0)), 0);
     for (const piece of model.pieces) {
-      const materials = Object.fromEntries(TopoLandcover.CATEGORIES.map(c => [c, emptyMesh()]));
+      const materials = Object.fromEntries(CATEGORIES.map(c => [c, emptyMesh()]));
       if (piece.pos.length) {
         const local = [], keep = x => { local.push(x); return x; };
         try {
@@ -88,10 +110,10 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
           if (model.citySolids?.[piece.id]?.length) shell = keep(shell.subtract(solidOf(model.citySolids[piece.id])));
           // The skin already lies inside the fused piece, so each domain's slice of it
           // is the finished part; the leftover keeps everything the merged skin misses.
-          for (let kind = 0; kind < 3; kind++) {
-            if (domains[kind]) materials[TopoLandcover.CATEGORIES[kind]] = solidSoup(api, keep(shell.intersect(domains[kind])));
+          for (let kind = 0; kind < OTHER; kind++) {
+            if (domains[kind]) materials[CATEGORIES[kind]] = solidSoup(api, keep(shell.intersect(domains[kind])));
           }
-          materials.other = solidSoup(api, coveredDomain ? keep(fused.subtract(keep(shell.intersect(coveredDomain)))) : fused);
+          materials[CATEGORIES[OTHER]] = solidSoup(api, coveredDomain ? keep(fused.subtract(keep(shell.intersect(coveredDomain)))) : fused);
         } finally { for (let i = local.length - 1; i >= 0; i--) local[i].delete(); }
       }
       model.materialMeshes.push({ id: piece.id, materials });

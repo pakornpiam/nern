@@ -2,15 +2,25 @@
 (function (root) {
   'use strict';
   const MAX_AREA = 1000e6, LIMIT = 10000, MAX_VERTICES = 200000;
-  const CATEGORIES = ['water', 'forest', 'grass', 'other'];
+  const CATEGORIES = ['water', 'snow', 'forest', 'grass', 'other'];
+  /* The code IS the index into CATEGORIES, and the order IS the precedence: classify()
+     keeps the LOWEST code where polygons overlap, so a glacier beats a wood it sits
+     inside. OTHER is simultaneously the unmapped return, classify()'s fill sentinel and
+     that Math.min ceiling, so it has to stay last. */
+  const CODE = Object.freeze(Object.fromEntries(CATEGORIES.map((c, i) => [c, i])));
+  const OTHER = CATEGORIES.length - 1;
   const cache = new Map();
   const fail = code => { const error = new Error(code); error.code = code; return error; };
   const abort = signal => { if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError'); };
   function category(tags = {}) {
-    if (tags.natural === 'wood' || tags.landuse === 'forest') return 1;
+    /* OSM records PERMANENT ice only. There is no seasonal-snow tag at all, and
+       landuse=winter_sports is a ski-resort boundary rather than snow -- it routinely
+       contains forest -- so it is deliberately left unmapped. */
+    if (tags.natural === 'glacier' || tags.natural === 'snowfield') return CODE.snow;
+    if (tags.natural === 'wood' || tags.landuse === 'forest') return CODE.forest;
     if (['grassland', 'scrub', 'heath'].includes(tags.natural) ||
-      ['grass', 'meadow', 'farmland', 'orchard', 'vineyard', 'allotments'].includes(tags.landuse)) return 2;
-    return 3;
+      ['grass', 'meadow', 'farmland', 'orchard', 'vineyard', 'allotments'].includes(tags.landuse)) return CODE.grass;
+    return OTHER;
   }
   function stitch(segments) {
     const same = (a, b) => a[0] === b[0] && a[1] === b[1];
@@ -47,7 +57,7 @@
     const candidates = elements.filter(e => e.type === 'relation').concat(elements.filter(e => e.type === 'way'));
     for (const el of candidates) {
       const kind = category(el.tags);
-      if (kind === 3 || consumed.has(`${el.type}/${el.id}`)) continue;
+      if (kind === OTHER || consumed.has(`${el.type}/${el.id}`)) continue;
       try {
         let polygons;
         if (el.type === 'relation') {
@@ -83,7 +93,7 @@
     const key = bounds.flat().map(n => n.toFixed(7)).join(',');
     if (cache.has(key)) return cache.get(key);
     const [[s, west], [n, east]] = bounds, bbox = `${s},${west},${n},${east}`;
-    const filters = ['natural~"^(wood|grassland|scrub|heath)$"', 'landuse~"^(forest|grass|meadow|farmland|orchard|vineyard|allotments)$"'];
+    const filters = ['natural~"^(wood|grassland|scrub|heath|glacier|snowfield)$"', 'landuse~"^(forest|grass|meadow|farmland|orchard|vineyard|allotments)$"'];
     const query = `[out:json][timeout:25];(${filters.flatMap(f => ['way', 'relation'].map(type => `${type}[${f}](${bbox});`)).join('')});out geom;`;
     try {
       const response = await fetcher('https://overpass-api.de/api/interpreter', {
@@ -100,7 +110,7 @@
   }
   // Scanline fill evaluates cell centers; holes use even/odd parity per polygon.
   function classify(data, bounds, W, D) {
-    const cells = new Uint8Array(W * D).fill(3);
+    const cells = new Uint8Array(W * D).fill(OTHER);
     const [[s, w], [n, e]] = bounds, dx = (e - w) / W, dy = (n - s) / D;
     for (const f of data.features) for (const poly of f.polygons) {
       let lo = Infinity, hi = -Infinity;
@@ -122,5 +132,5 @@
     }
     return cells;
   }
-  root.TopoLandcover = { CATEGORIES, MAX_AREA, LIMIT, MAX_VERTICES, category, normalize, fetchLandcover, classify };
+  root.TopoLandcover = { CATEGORIES, CODE, OTHER, MAX_AREA, LIMIT, MAX_VERTICES, category, normalize, fetchLandcover, classify };
 })(globalThis);

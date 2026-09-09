@@ -522,25 +522,30 @@ test('re-enabling water on a model generated without it asks for a regenerate', 
   expect(errors).toEqual([]);
 });
 
-/* Land cover replaces the elevation bands with four mapped materials. The fixture
-   paints the west half wood and the east half farmland; the source's own water mask
-   already claims the western third, so all four categories are in play. */
+/* Land cover replaces the elevation bands with mapped materials. The fixture paints
+   the west half wood and the east half farmland; the source's own water mask already
+   claims the western third. Deliberately GLACIER-FREE: that is what makes the four-
+   material assertions a guard that an ordinary print still fits one AMS unit. */
+const asWay = ({ bbox: [x0, y0, x1, y1], ...rest }) => ({ ...rest,
+  geometry: [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]].map(([lon, lat]) => ({ lon, lat })) });
 const LAND_PATCHES = [
   { type: 'way', id: 1, tags: { natural: 'wood' }, bbox: [0, 0, 0.001, 0.002] },
   { type: 'way', id: 2, tags: { landuse: 'farmland' }, bbox: [0.001, 0, 0.002, 0.002] },
-].map(({ bbox: [x0, y0, x1, y1], ...rest }) => ({ ...rest,
-  geometry: [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]].map(([lon, lat]) => ({ lon, lat })) }));
+].map(asWay);
+// The glacier covers the northern half of both, and outranks them where they overlap.
+const SNOW_PATCHES = LAND_PATCHES.concat(
+  [{ type: 'way', id: 3, tags: { natural: 'glacier' }, bbox: [0, 0.001, 0.002, 0.002] }].map(asWay));
 
-async function routeLandcover(page, counter = {}) {
+async function routeLandcover(page, counter = {}, elements = LAND_PATCHES) {
   counter.calls = 0;
   await page.route('https://overpass-api.de/api/interpreter', async route => {
     counter.calls++;
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ elements: LAND_PATCHES }) });
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ elements }) });
   });
   return counter;
 }
 
-test('real land types replace the elevation bands with four mapped materials', async ({ page }) => {
+test('real land types replace the elevation bands with mapped materials', async ({ page }) => {
   const errors = await setup(page);
   const overpass = await routeLandcover(page);
   await installFixture(page, { water: true });
@@ -564,8 +569,11 @@ test('real land types replace the elevation bands with four mapped materials', a
     // The terrain mesh itself is untouched: STL exports still carry whole pieces.
     pieceTris: state.model.pieces[0].pos.length / 9,
   }));
-  expect(built.categories).toEqual(['water', 'forest', 'grass', 'other']);
+  expect(built.categories).toEqual(['water', 'snow', 'forest', 'grass', 'other']);
+  // No glacier in this fixture and no snow line, so snow earns no mesh and no slot:
+  // the four assertions below are the guard that ordinary prints stay at one AMS unit.
   expect(built.filled).toEqual(['water', 'forest', 'grass', 'other']);
+  await expect(page.locator('#landSnowRow')).toBeHidden();
   expect(built.info.status).toBe('ok');
   expect(built.info.vegetationPercent).toBeGreaterThan(0);
   expect(built.pieceTris).toBeGreaterThan(0);
@@ -586,14 +594,17 @@ test('real land types replace the elevation bands with four mapped materials', a
     const archive = await JSZip.loadAsync(files.terrainBlob);
     const xml = await archive.file('3D/3dmodel.model').async('string');
     const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const settings = JSON.parse(await archive.file('Metadata/project_settings.config').async('string'));
     return { xmlErrors: doc.querySelectorAll('parsererror').length,
       materials: [...doc.querySelectorAll('base')].map(b => b.getAttribute('name')),
       colors: [...doc.querySelectorAll('base')].map(b => b.getAttribute('displaycolor')),
+      filaments: settings.filament_colour,
       readme: await (async () => { const zip = new JSZip(); addModelStls(zip, state.model);
         return zip.file('README.txt').async('string'); })() };
   });
   expect(bambu.xmlErrors).toBe(0);
   expect(bambu.materials).toEqual(['water', 'forest', 'grass', 'other']);
+  expect(bambu.filaments).toHaveLength(4);
   expect(bambu.colors[1]).toBe('#123456FF');
   expect(bambu.readme).toContain('OpenStreetMap contributors');
 
@@ -712,6 +723,85 @@ test('an area past the land-type ceiling hands the colour picker back to the ban
   await page.selectOption('#colorMode', 'landcover');
   await expect.poll(() => page.evaluate(() => !!state.model.materialMeshes)).toBe(true);
   await expect(page.locator('#colorMode')).toHaveValue('landcover');
+  expect(overpass.calls).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test('a mapped glacier adds a fifth material and its own filament slot', async ({ page }) => {
+  const errors = await setup(page);
+  await routeLandcover(page, {}, SNOW_PATCHES);
+  await installFixture(page, { water: true });
+  await page.selectOption('#colorMode', 'landcover');
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+
+  expect(await page.evaluate(() => Object.entries(state.model.materialMeshes[0].materials)
+    .filter(([, m]) => m.pos.length).map(([c]) => c))).toEqual(['water', 'snow', 'forest', 'grass', 'other']);
+  expect(await page.evaluate(() => state.model.landcoverInfo.hasSnow)).toBe(true);
+  expect(await page.evaluate(() => state.model.landcoverInfo.snowPercent)).toBeGreaterThan(0);
+  // The colour picker and the legend both admit the fifth material.
+  await expect(page.locator('#landSnowRow')).toBeVisible();
+  expect(await page.evaluate(() => $('legend').style.background)).toContain('20%');
+  await expect(page.locator('#landcoverStatus')).toContainText('Snow and ice');
+  await expect(page.locator('#hintLandcoverSlots')).toContainText('5 materials');
+
+  const bambu = await page.evaluate(async () => {
+    const files = await buildBambuFiles(state.model);
+    const archive = await JSZip.loadAsync(files.terrainBlob);
+    const doc = new DOMParser().parseFromString(await archive.file('3D/3dmodel.model').async('string'), 'application/xml');
+    const sidecar = await archive.file('Metadata/model_settings.config').async('string');
+    return {
+      materials: [...doc.querySelectorAll('base')].map(b => b.getAttribute('name')),
+      filaments: JSON.parse(await archive.file('Metadata/project_settings.config').async('string')).filament_colour,
+      extruders: [...sidecar.matchAll(/key="extruder" value="(\d+)"/g)].map(m => +m[1]),
+    };
+  });
+  expect(bambu.materials).toEqual(['water', 'snow', 'forest', 'grass', 'other']);
+  expect(bambu.filaments).toHaveLength(5);
+  // The numbering contract: 1-based, dense, and never past the filament list.
+  expect(Math.min(...bambu.extruders)).toBe(1);
+  expect(Math.max(...bambu.extruders)).toBeLessThanOrEqual(bambu.filaments.length);
+  expect([...new Set(bambu.extruders)].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+  expect(errors).toEqual([]);
+});
+
+test('the snow line paints by altitude without going back to the network', async ({ page }) => {
+  // The fixture ramps 10-14 m, so a 13 m line takes the eastern quarter. No glacier
+  // in this patch set, so any snow that appears came from the altitude alone.
+  const errors = await setup(page);
+  const overpass = await routeLandcover(page);
+  await installFixture(page, { water: true });
+  await page.selectOption('#colorMode', 'landcover');
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  expect(await page.evaluate(() => state.model.materialMeshes[0].materials.snow.pos.length)).toBe(0);
+  await expect(page.locator('#snowLineOpts')).toBeHidden();
+  expect(overpass.calls).toBe(1);
+
+  await page.locator('#snowLineEnabled').check();
+  await expect(page.locator('#snowLineOpts')).toBeVisible();
+  await page.locator('#snowLine').fill('13');
+  await page.locator('#snowLine').dispatchEvent('change');
+  await expect.poll(() => page.evaluate(() => state.model.materialMeshes[0].materials.snow.pos.length)).toBeGreaterThan(0);
+  // Restamped from the cached source: the altitude is applied in the geometry, not the fetch.
+  expect(overpass.calls).toBe(1);
+  expect(await page.evaluate(() => state.model.opts.snowLineM)).toBe(13);
+  expect(await page.evaluate(() => state.model.landcoverInfo.snowPercent)).toBeGreaterThan(0);
+  await expect(page.locator('#landSnowRow')).toBeVisible();
+  expect(await page.evaluate(() => $('legend').style.background)).toContain('20%');
+  // The exported README owns up: this is an altitude someone typed, not measured snow.
+  const readme = await page.evaluate(async () => {
+    const zip = new JSZip(); addModelStls(zip, state.model);
+    return zip.file('README.txt').async('string');
+  });
+  expect(readme).toContain('at or above 13 m');
+  expect(readme).toContain('not measured snow cover');
+
+  // Off again and the fifth material goes with it, still with no request.
+  await page.locator('#snowLineEnabled').uncheck();
+  await expect.poll(() => page.evaluate(() => state.model.materialMeshes[0].materials.snow.pos.length)).toBe(0);
+  await expect(page.locator('#landSnowRow')).toBeHidden();
+  expect(await page.evaluate(() => state.model.opts.snowLineM)).toBe(null);
   expect(overpass.calls).toBe(1);
   expect(errors).toEqual([]);
 });
