@@ -69,27 +69,27 @@ test('land-cover requests skip disabled mode, cache successes and empty results,
     return { ok: true, json: async () => ({ elements }) };
   };
   const b = [[1, 1], [1.001, 1.001]];
-  assert.equal((await L.fetchLandcover(b, { enabled: false, fetcher: response([]) })).status, 'off');
+  assert.equal((await L.fetchLandcover(b, { retryMs: 0, enabled: false, fetcher: response([]) })).status, 'off');
   assert.equal(calls, 0);
-  const first = await L.fetchLandcover(b, { fetcher: response([]) });
-  assert.equal(first.status, 'empty'); assert.equal(await L.fetchLandcover(b, { fetcher: response([]) }), first); assert.equal(calls, 1);
+  const first = await L.fetchLandcover(b, { retryMs: 0, fetcher: response([]) });
+  assert.equal(first.status, 'empty'); assert.equal(await L.fetchLandcover(b, { retryMs: 0, fetcher: response([]) }), first); assert.equal(calls, 1);
   const b2 = [[2, 2], [2.001, 2.001]];
-  await assert.rejects(L.fetchLandcover(b2, { fetcher: async () => ({ ok: true, json: async () => ({ remark: 'timeout', elements: [] }) }) }), /errLandcoverFetch/);
-  await assert.rejects(L.fetchLandcover(b2, { fetcher: async () => { throw new Error('offline'); } }), /errLandcoverFetch/);
-  assert.equal((await L.fetchLandcover(b2, { fetcher: response([forest()]) })).status, 'ok');
+  await assert.rejects(L.fetchLandcover(b2, { retryMs: 0, fetcher: async () => ({ ok: true, json: async () => ({ remark: 'timeout', elements: [] }) }) }), /errLandcoverFetch/);
+  await assert.rejects(L.fetchLandcover(b2, { retryMs: 0, fetcher: async () => { throw new Error('offline'); } }), /errLandcoverFetch/);
+  assert.equal((await L.fetchLandcover(b2, { retryMs: 0, fetcher: response([forest()]) })).status, 'ok');
   const controller = new AbortController(); controller.abort();
-  await assert.rejects(L.fetchLandcover(b, { signal: controller.signal, fetcher: response([]) }), { name: 'AbortError' });
+  await assert.rejects(L.fetchLandcover(b, { retryMs: 0, signal: controller.signal, fetcher: response([]) }), { name: 'AbortError' });
   const pending = new AbortController();
-  await assert.rejects(L.fetchLandcover([[3, 3], [3.001, 3.001]], { signal: pending.signal, fetcher: async () => {
+  await assert.rejects(L.fetchLandcover([[3, 3], [3.001, 3.001]], { retryMs: 0, signal: pending.signal, fetcher: async () => {
     pending.abort(); return { ok: true, json: async () => ({ elements: [] }) };
   } }), { name: 'AbortError' });
 });
 
 test('area, feature and vertex budgets reject oversized data', async () => {
   // ~49,000 km2: past the ceiling. A 1x1 degree box is ~12,300 km2 and now goes through.
-  await assert.rejects(L.fetchLandcover([[0, 0], [2, 2]], { fetcher: () => { throw new Error('must not fetch'); } }), /errLandcoverArea/);
+  await assert.rejects(L.fetchLandcover([[0, 0], [2, 2]], { retryMs: 0, fetcher: () => { throw new Error('must not fetch'); } }), /errLandcoverArea/);
   // Wrapped bounds measure as almost no width, so the area guard alone would pass them.
-  await assert.rejects(L.fetchLandcover([[0, 170], [1, -170]], { fetcher: () => { throw new Error('must not fetch'); } }), /errLandcoverArea/);
+  await assert.rejects(L.fetchLandcover([[0, 170], [1, -170]], { retryMs: 0, fetcher: () => { throw new Error('must not fetch'); } }), /errLandcoverArea/);
   assert.throws(() => L.normalize(Array.from({ length: L.LIMIT + 1 }, (_, i) => forest(i))), /errLandcoverLimit/);
   assert.throws(() => L.normalize([{ ...forest(), geometry: Array(L.MAX_VERTICES + 1).fill({ lon: 0, lat: 0 }) }]), /errLandcoverLimit/);
 });
@@ -212,7 +212,7 @@ test('a large selection is split into tiles, merged once, and deduplicated', asy
      comes back from several. It must survive as one. */
   let calls = 0;
   const wide = feature(1, rectangle(10, 10, 11, 11), { natural: 'wood' });
-  const data = await L.fetchLandcover(big, { fetcher: async () => {
+  const data = await L.fetchLandcover(big, { retryMs: 0, fetcher: async () => {
     calls++; return { ok: true, json: async () => ({ elements: [wide] }) };
   } });
   assert.equal(calls, boxes.length);
@@ -231,7 +231,7 @@ test('a transient tile failure is retried rather than costing a rectangle of lan
   const total = L.tileBoxes(big).length;
   const wood = feature(1, rectangle(40.1, 40.1, 40.2, 40.2), { natural: 'wood' });
   const seen = new Map();
-  const healed = await L.fetchLandcover(big, { fetcher: async (_url, init) => {
+  const healed = await L.fetchLandcover(big, { retryMs: 0, fetcher: async (_url, init) => {
     const key = bboxOf(init), n = (seen.get(key) || 0) + 1; seen.set(key, n);
     if (n === 1) return { ok: false, status: 429 };             // every tile 429s once
     return { ok: true, json: async () => ({ elements: [wood] }) };
@@ -241,7 +241,7 @@ test('a transient tile failure is retried rather than costing a rectangle of lan
   assert.equal(seen.size, total);
   // A 400 is the query being wrong, which a retry cannot mend, so it is not retried.
   const tries = new Map();
-  await assert.rejects(L.fetchLandcover([[41, 41], [42, 42]], { fetcher: async (_url, init) => {
+  await assert.rejects(L.fetchLandcover([[41, 41], [42, 42]], { retryMs: 0, fetcher: async (_url, init) => {
     const key = bboxOf(init); tries.set(key, (tries.get(key) || 0) + 1);
     return { ok: false, status: 400 };
   } }), /errLandcoverFetch/);
@@ -254,13 +254,13 @@ test('a timed-out tile keeps the ground it did return', async () => {
   const big = [[50, 50], [51, 51]];
   const total = L.tileBoxes(big).length;
   const wood = feature(1, rectangle(50.1, 50.1, 50.4, 50.4), { natural: 'wood' });
-  const truncated = await L.fetchLandcover(big, { fetcher: async () => ({ ok: true,
+  const truncated = await L.fetchLandcover(big, { retryMs: 0, fetcher: async () => ({ ok: true,
     json: async () => ({ remark: 'runtime error: Query timed out', elements: [wood] }) }) });
   assert.equal(truncated.status, 'partial');    // kept, but the gap is still declared
   assert.equal(truncated.missing, total);
   assert.ok(truncated.features.length > 0);
   // A remark with nothing attached is a plain failure.
-  await assert.rejects(L.fetchLandcover([[51, 51], [52, 52]], { fetcher: async () => ({ ok: true,
+  await assert.rejects(L.fetchLandcover([[51, 51], [52, 52]], { retryMs: 0, fetcher: async () => ({ ok: true,
     json: async () => ({ remark: 'runtime error', elements: [] }) }) }), /errLandcoverFetch/);
 });
 
@@ -278,7 +278,7 @@ test('a failed tile leaves a gap the caller can see, and is never cached', async
     if (key === dead) throw new Error('overpass down');
     return { ok: true, json: async () => ({ elements: [wood(calls)] }) };
   };
-  const partial = await L.fetchLandcover(big, { fetcher: flaky });
+  const partial = await L.fetchLandcover(big, { retryMs: 0, fetcher: flaky });
   assert.equal(partial.status, 'partial');
   assert.equal(partial.missing, 1);
   assert.equal(partial.tiles, total);
@@ -286,7 +286,7 @@ test('a failed tile leaves a gap the caller can see, and is never cached', async
 
   // Uncached, so pressing Generate really does go back for the gap.
   calls = 0;
-  const retry = await L.fetchLandcover(big, { fetcher: async () => {
+  const retry = await L.fetchLandcover(big, { retryMs: 0, fetcher: async () => {
     calls++; return { ok: true, json: async () => ({ elements: [wood(1)] }) };
   } });
   assert.equal(calls, total);
