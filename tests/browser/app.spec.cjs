@@ -532,6 +532,12 @@ const LAND_PATCHES = [
   { type: 'way', id: 1, tags: { natural: 'wood' }, bbox: [0, 0, 0.001, 0.002] },
   { type: 'way', id: 2, tags: { landuse: 'farmland' }, bbox: [0.001, 0, 0.002, 0.002] },
 ].map(asWay);
+/* Small patches with real unmapped ground around them, east of the water the fixture
+   source already claims -- LAND_PATCHES tiles the whole box, so nothing could grow. */
+const SPARSE_PATCHES = [
+  { type: 'way', id: 11, tags: { natural: 'wood' }, bbox: [0.0008, 0.0008, 0.0012, 0.0012] },
+  { type: 'way', id: 12, tags: { landuse: 'farmland' }, bbox: [0.0014, 0.0014, 0.0018, 0.0018] },
+].map(asWay);
 // The glacier covers the northern half of both, and outranks them where they overlap.
 const SNOW_PATCHES = LAND_PATCHES.concat(
   [{ type: 'way', id: 3, tags: { natural: 'glacier' }, bbox: [0, 0.001, 0.002, 0.002] }].map(asWay));
@@ -868,29 +874,34 @@ test('a tile that fails leaves a gap the details panel names, not a dead build',
   expect(errors).toEqual([]);
 });
 
-test('the spread slider fills the gaps from cached data, without moving the water', async ({ page }) => {
+test('each land type spreads on its own, from cached data, without moving the water', async ({ page }) => {
   const errors = await setup(page);
-  const overpass = await routeLandcover(page);
+  const overpass = await routeLandcover(page, {}, SPARSE_PATCHES);
   await installFixture(page, { water: true });
   // Land types only: elevation bands already cover every cell, so there is nothing to grow into.
-  await expect(page.locator('#landGrow')).toBeHidden();
+  await expect(page.locator('#landGrowForest')).toBeHidden();
   await page.selectOption('#colorMode', 'landcover');
-  await expect(page.locator('#landGrow')).toBeVisible();
+  for (const id of ['landGrowSnow', 'landGrowForest', 'landGrowGrass']) {
+    await expect(page.locator('#' + id)).toBeVisible();
+  }
   await page.click('#generate');
   await expect(page.locator('#exportOne')).toBeEnabled();
   const before = await page.evaluate(() => ({
     veg: state.model.landcoverInfo.vegetationPercent,
+    mapped: state.model.landcoverInfo.mappedPercent,
     water: state.model.materialMeshes[0].materials.water.pos.length,
     grow: state.model.landcoverInfo.growCells,
   }));
-  expect(before.grow).toBe(0);
+  expect(before.grow).toEqual({ snow: 0, forest: 0, grass: 0 });
   expect(overpass.calls).toBe(1);
 
-  await page.locator('#landGrow').fill('2');
-  await page.locator('#landGrow').dispatchEvent('input');
-  await expect.poll(() => page.evaluate(() => state.model.landcoverInfo.growCells)).toBe(2);
-  await expect(page.locator('#landGrowVal')).toHaveText('2');
-  expect(await page.evaluate(() => state.model.opts.landGrowCells)).toBe(2);
+  // Move forest alone; snow and grass must stay exactly where they were.
+  await page.locator('#landGrowForest').fill('2');
+  await page.locator('#landGrowForest').dispatchEvent('input');
+  await expect.poll(() => page.evaluate(() => state.model.landcoverInfo.growCells.forest)).toBe(2);
+  await expect(page.locator('#landGrowForestVal')).toHaveText('2');
+  expect(await page.evaluate(() => state.model.landcoverInfo.growCells)).toEqual({ snow: 0, forest: 2, grass: 0 });
+  expect(await page.evaluate(() => state.model.opts.landGrowCells)).toEqual({ snow: 0, forest: 2, grass: 0 });
   // Restamped from the cached response: spreading is geometry, not a new lookup.
   expect(overpass.calls).toBe(1);
 
@@ -901,15 +912,26 @@ test('the spread slider fills the gaps from cached data, without moving the wate
   }));
   // The OSM figure still reports what OSM mapped; only the painted share moves.
   expect(after.veg).toBeCloseTo(before.veg, 6);
-  expect(after.colored).toBeGreaterThanOrEqual(after.veg);
+  expect(after.colored).toBeGreaterThan(before.mapped);
   // Growth writes into unmapped ground only, so the shoreline is untouched.
   expect(after.water).toBe(before.water);
-  await expect(page.locator('#detailNotes')).toContainText('Spread by 2 cells');
+  // The note names the one type that moved, not the two that did not.
+  await expect(page.locator('#detailNotes')).toContainText('Forest 2');
+  await expect(page.locator('#detailNotes')).not.toContainText('Grass');
 
-  await page.locator('#landGrow').fill('0');
-  await page.locator('#landGrow').dispatchEvent('input');
-  await expect.poll(() => page.evaluate(() => state.model.landcoverInfo.growCells)).toBe(0);
-  expect(await page.evaluate(() => state.model.landcoverInfo.coloredPercent)).toBe(null);
+  // Spreading grass as well reaches strictly more ground.
+  await page.locator('#landGrowGrass').fill('2');
+  await page.locator('#landGrowGrass').dispatchEvent('input');
+  await expect.poll(() => page.evaluate(() => state.model.landcoverInfo.growCells.grass)).toBe(2);
+  expect(await page.evaluate(() => state.model.landcoverInfo.coloredPercent)).toBeGreaterThan(after.colored);
+  await expect(page.locator('#detailNotes')).toContainText('Grass');
+
+  // Back to zero everywhere and the note goes with it.
+  for (const id of ['landGrowForest', 'landGrowGrass']) {
+    await page.locator('#' + id).fill('0');
+    await page.locator('#' + id).dispatchEvent('input');
+  }
+  await expect.poll(() => page.evaluate(() => state.model.landcoverInfo.coloredPercent)).toBe(null);
   await expect(page.locator('#detailNotes')).not.toContainText('Spread by');
   expect(overpass.calls).toBe(1);
   expect(errors).toEqual([]);

@@ -25,7 +25,13 @@ export function cellRectangles(cells, W, D, kind) {
    invents nothing where nothing is mapped. */
 export const MAX_GROW = 5;
 export function growCategories(cells, W, D, rounds, shape, CODE, OTHER) {
-  for (let r = 0; r < rounds; r++) {
+  /* Per code, so each land type reaches its own distance; a plain number means all of them.
+     Densified either way: a gap in a sparse array would make total NaN and quietly grow
+     nothing at all. */
+  const per = Array.from({ length: OTHER + 1 }, (_, c) => (c <= CODE.water || c >= OTHER) ? 0
+    : Math.max(0, (typeof rounds === 'number' ? rounds : rounds[c]) | 0));
+  const total = Math.max(0, ...per);
+  for (let r = 0; r < total; r++) {
     const src = cells.slice();   // one snapshot per round, so growth advances exactly one cell
     for (let j = 0; j < D; j++) for (let i = 0; i < W; i++) {
       const k = j * W + i;
@@ -38,7 +44,7 @@ export function growCategories(cells, W, D, rounds, shape, CODE, OTHER) {
          never a source. Otherwise the lowest code wins, the same precedence classify() uses
          where polygons overlap. Four neighbours, not eight -- a diagonal step covers 1.41
          cells and leaves the checkerboards buildCapCellMask has to bridge. */
-      const take = nb => { if (nb > CODE.water && nb < best) best = nb; };
+      const take = nb => { if (nb > CODE.water && nb < best && r < per[nb]) best = nb; };
       if (i > 0) take(src[k - 1]);
       if (i + 1 < W) take(src[k + 1]);
       if (j > 0) take(src[k - W]);
@@ -105,9 +111,12 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
      quoted as what OSM actually mapped, and growth must not quietly inflate it. After
      water because growth writes only into unmapped ground, which is what leaves the
      shoreline exactly where the water mask put it. */
-  const rounds = Math.max(0, Math.min(MAX_GROW, model.opts?.landGrowCells | 0));
+  const grow = model.opts?.landGrowCells;
+  const rounds = Array.from({ length: OTHER + 1 }, (_, c) => (c <= CODE.water || c >= OTHER) ? 0
+    : Math.max(0, Math.min(MAX_GROW, (typeof grow === 'number' ? grow : grow?.[CATEGORIES[c]]) | 0)));
+  const growing = rounds.some(v => v > 0);
   let colored = null;
-  if (rounds) {
+  if (growing) {
     growCategories(cells, g.W, g.D, rounds, g.cellShape, CODE, OTHER);
     colored = 0;
     for (let k = 0; k < cells.length; k++) {
@@ -117,7 +126,8 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
   model.landcoverInfo = { status: data.status, invalid: data.invalid,
     vegetationPercent: pct(counts[CODE.forest] + counts[CODE.grass]),
     snowPercent: pct(counts[CODE.snow]), hasSnow: counts[CODE.snow] > 0, snowLineM: snowLine,
-    mappedPercent: pct(mapped), growCells: rounds, coloredPercent: rounds ? pct(colored) : null,
+    mappedPercent: pct(mapped), coloredPercent: growing ? pct(colored) : null,
+    growCells: Object.fromEntries(CATEGORIES.slice(1, OTHER).map(c => [c, rounds[CODE[c]]])),
     missing: data.missing || 0, tiles: data.tiles || 1 };
   model.materialMeshes = [];
   const owned = [], own = x => { owned.push(x); return x; };

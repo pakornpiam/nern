@@ -285,15 +285,42 @@ test('spreading grows mapped types one cell a round, and never moves water', asy
   const shape = Uint8Array.from([1, 1, 1, 1, 0, 0, 0]);
   assert.deepEqual([...growCategories(one.slice(), W, D, 3, shape, CODE, OTHER)],
     [CODE.forest, CODE.forest, CODE.forest, CODE.forest, OTHER, OTHER, OTHER]);
+
+  /* Per code: each type reaches its own distance. Forest 2, grass 0 -- the grass cell holds
+     its ground but gains none, while the forest advances two and then stops. */
+  const rounds = []; rounds[CODE.forest] = 2; rounds[CODE.grass] = 0;
+  const mixed = grid(CODE.grass, OTHER, OTHER, OTHER, CODE.forest, OTHER, OTHER);
+  assert.deepEqual([...growCategories(mixed.slice(), W, D, rounds, all, CODE, OTHER)],
+    [CODE.grass, OTHER, CODE.forest, CODE.forest, CODE.forest, CODE.forest, CODE.forest]);
+  // And the inverse, to prove neither is privileged by the loop order.
+  const other = []; other[CODE.forest] = 0; other[CODE.grass] = 2;
+  assert.deepEqual([...growCategories(mixed.slice(), W, D, other, all, CODE, OTHER)],
+    [CODE.grass, CODE.grass, CODE.grass, OTHER, CODE.forest, OTHER, OTHER]);
 });
 
 test('spreading raises what is painted without touching what was mapped', async () => {
-  const plain = await build();
-  const spread = await build({ landGrowCells: 2 });
+  /* The default fixture tiles the whole box with wood and farmland, so there is nothing to
+     grow INTO. Use a sparse map instead: two small patches east of the water, with real
+     unmapped ground between and around them. */
+  const sparse = [feature(1, rectangle(0.0008, 0.0008, 0.0012, 0.0012), { natural: 'wood' }),
+    feature(2, rectangle(0.0014, 0.0014, 0.0018, 0.0018), { landuse: 'farmland' })];
+  const plain = await build({}, {}, sparse);
+  const spread = await build({ landGrowCells: 2 }, {}, sparse);
   // The OSM figure is measured before the spread, so the note keeps meaning what it says.
   assert.equal(spread.landcoverInfo.vegetationPercent, plain.landcoverInfo.vegetationPercent);
-  assert.equal(spread.landcoverInfo.growCells, 2);
-  assert.equal(plain.landcoverInfo.growCells, 0);
+  assert.deepEqual(spread.landcoverInfo.growCells, { snow: 2, forest: 2, grass: 2 });
+  assert.deepEqual(plain.landcoverInfo.growCells, { snow: 0, forest: 0, grass: 0 });
+  // coloredPercent is the "is anything growing" signal the note gates on.
   assert.equal(plain.landcoverInfo.coloredPercent, null);
-  assert.ok(spread.landcoverInfo.coloredPercent >= spread.landcoverInfo.vegetationPercent);
+  assert.ok(spread.landcoverInfo.coloredPercent > plain.landcoverInfo.mappedPercent);
+
+  // Per type: one land type spreads while the others are left exactly alone.
+  const forestOnly = await build({ landGrowCells: { forest: 2 } }, {}, sparse);
+  assert.deepEqual(forestOnly.landcoverInfo.growCells, { snow: 0, forest: 2, grass: 0 });
+  assert.equal(forestOnly.landcoverInfo.vegetationPercent, plain.landcoverInfo.vegetationPercent);
+  assert.ok(forestOnly.landcoverInfo.coloredPercent > plain.landcoverInfo.mappedPercent);
+  // Spreading one type reaches less ground than spreading every type.
+  assert.ok(forestOnly.landcoverInfo.coloredPercent < spread.landcoverInfo.coloredPercent);
+  // All zeroes is off, whichever shape it arrives in.
+  assert.equal((await build({ landGrowCells: { forest: 0 } }, {}, sparse)).landcoverInfo.coloredPercent, null);
 });
