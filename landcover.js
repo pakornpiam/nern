@@ -142,12 +142,14 @@
     ]);
     return boxes;
   }
-  const backoff = attempt => new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+  // Injectable like fetcher, so tests exercise the retry ladder without sleeping through it.
+  const RETRY_MS = 500;
+  const backoff = (attempt, base) => new Promise(resolve => setTimeout(resolve, base * 2 ** attempt));
   /* Public Overpass rate-limits and times out as a matter of course, and one tile lost to a
      transient 429 takes a whole rectangle of ground with it -- half the map on a two-tile
      selection, and nothing about the result says which half. Same retry ladder as
      TopoTerrain.request, with a longer wait: these are queue slots, not static tiles. */
-  async function requestBox(box, fetcher, signal) {
+  async function requestBox(box, fetcher, signal, retryMs) {
     const [[s, west], [n, east]] = box, bbox = `${s},${west},${n},${east}`;
     const filters = ['natural~"^(wood|grassland|scrub|heath|glacier|snowfield)$"', 'landuse~"^(forest|grass|meadow|farmland|orchard|vineyard|allotments)$"'];
     const query = `[out:json][timeout:25];(${filters.flatMap(f => ['way', 'relation'].map(type => `${type}[${f}](${bbox});`)).join('')});out geom;`;
@@ -164,13 +166,13 @@
         // will be just as wrong next time.
         if (!response.ok) {
           if (last || !(response.status === 429 || response.status >= 500)) throw fail('errLandcoverFetch');
-          await backoff(attempt); continue;
+          await backoff(attempt, retryMs); continue;
         }
         data = await response.json();
       } catch (e) {
         abort(signal);
         if (last || e.code === 'errLandcoverFetch') throw fail('errLandcoverFetch');
-        await backoff(attempt); continue;   // network error or client timeout
+        await backoff(attempt, retryMs); continue;   // network error or client timeout
       }
       if (!Array.isArray(data.elements)) throw fail('errLandcoverFetch');
       /* A server-side timeout answers 200 with a remark AND the elements it did manage to
@@ -179,12 +181,12 @@
          remark came with nothing at all. */
       if (data.remark && !data.elements.length) {
         if (last) throw fail('errLandcoverFetch');
-        await backoff(attempt); continue;
+        await backoff(attempt, retryMs); continue;
       }
       return { elements: data.elements, complete: !data.remark };
     }
   }
-  async function fetchLandcover(bounds, { signal, enabled = true, fetcher = fetch, onProgress } = {}) {
+  async function fetchLandcover(bounds, { signal, enabled = true, fetcher = fetch, onProgress, retryMs = RETRY_MS } = {}) {
     abort(signal);
     if (!enabled) return { features: [], invalid: 0, status: 'off' };
     const [[s, w], [n, e]] = bounds;
@@ -210,7 +212,7 @@
     try {
       await root.TopoTerrain.pool(boxes, async box => {
         try {
-          const { elements, complete } = await requestBox(box, fetcher, signal);
+          const { elements, complete } = await requestBox(box, fetcher, signal, retryMs);
           for (const el of elements) merged.set(`${el.type}/${el.id}`, el);
           if (!complete) truncated++;
         } catch (e) {
