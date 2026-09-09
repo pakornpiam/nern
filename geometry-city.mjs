@@ -160,6 +160,7 @@ export async function fuseCity(model, progress = () => {}) {
 }
 
 export async function exportSolids(model, progress = () => {}) {
+  if (model.opts.colorMode === 'landcover') return model.materialMeshes;
   const G = TopoGeometry, output = [];
   // Existing terrain-only exports keep their established water/band construction.
   if (!model.cityInfo?.count) {

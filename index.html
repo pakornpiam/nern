@@ -14,6 +14,7 @@
 <script src="i18n.js"></script>
 <script src="terrain.js"></script>
 <script src="buildings.js"></script>
+<script src="landcover.js"></script>
 <script src="geometry-core.js"></script>
 <script src="geometry-client.js"></script>
 
@@ -184,6 +185,11 @@
 
     <div class="group">
       <h2 data-i18n="g4Title">4 · Colors (Bambu AMS)</h2>
+      <label class="row" for="colorMode" data-i18n="lblColorMode">Color mode</label>
+      <select id="colorMode">
+        <option value="elevation" data-i18n="modeElevation">Elevation bands</option>
+        <option value="landcover" data-i18n="modeLandcover">Real land types</option>
+      </select>
       <label class="band-check"><input id="waterEnabled" type="checkbox" checked /><span data-i18n="lblWaterEnabled">Enable water layer</span></label>
       <!-- Wrapped so renderWaterUI can hide the level, the flatten toggle and the hint
            as one unit: with the layer off none of them mean anything. -->
@@ -194,6 +200,7 @@
         <div class="hint" id="hintWater">Everything at or below this height prints in the water colour, together with the lakes and rivers OpenStreetMap knows about. The surface keeps its relief — it is painted, not flattened.</div>
       </div>
 
+      <div id="elevationColors">
       <div class="band-list" id="bandList" style="margin-top:8px">
         <div class="band-row" id="waterRow" hidden>
           <input id="colWater" type="color" value="#3b7bd4" />
@@ -235,6 +242,17 @@
         <label class="band-check" id="waterAutoRow"><input id="waterAuto" type="checkbox" checked /><span data-i18n="lblWaterAuto">4 bands when there is no water</span></label>
       </div>
       <div class="hint band-note" id="bandNote"></div>
+      </div>
+      <div id="landcoverColors" hidden>
+        <div class="band-list" style="margin-top:8px">
+          <div class="band-row"><input id="landWater" type="color" value="#3b7bd4" /><label for="landWater" data-i18n="landWater">Water</label></div>
+          <div class="band-row"><input id="landForest" type="color" value="#315c38" /><label for="landForest" data-i18n="landForest">Forest</label></div>
+          <div class="band-row"><input id="landGrass" type="color" value="#91ad62" /><label for="landGrass" data-i18n="landGrass">Grass / farmland</label></div>
+          <div class="band-row"><input id="landOther" type="color" value="#c3aa80" /><label for="landOther" data-i18n="landOther">Other ground / buildings</label></div>
+        </div>
+        <div class="hint" data-i18n="hintLandcover">Mapped land types form a 0.8 mm surface over the other-ground color. Unmapped ground and buildings use that color too. Detail controls the smallest mapped features shown.</div>
+        <div class="hint" id="landcoverStatus" role="status"></div>
+      </div>
       <div class="hint" id="hintBands"></div>
     </div>
 
@@ -374,6 +392,8 @@ const state = {
   model: null, // built geometry package
   models: [],  // one combined model, or one independently scaled model per region
   waterLevelM: 0.3, // mirrors #waterLevel; everything at or below prints as water
+  colorMode: 'elevation',
+  colorSettings: {},
   net: { elevation: new Map(), water: new Map() },
   /* Authoritative elevation-band boundaries, in METRES. The model's zCuts are a
      derived cache. These boot values make updateLegend() emit the same four even
@@ -1300,6 +1320,8 @@ const boundsKey = b => b[0][0].toFixed(7) + ',' + b[0][1].toFixed(7) + ',' +
 
 async function getTerrainSources(opts, onProgress, signal, key) {
   const { bounds, samples, terrainProvider } = opts;
+  if (opts.colorMode === 'landcover') onProgress(t('pgLandcover'));
+  const landcover = await TopoLandcover.fetchLandcover(bounds, { signal, enabled: opts.colorMode === 'landcover' });
   const bKey = boundsKey(bounds);
   const sKey = Array.isArray(samples) ? samples.join('x') : String(samples);
   const eKey = terrainProvider + '|' + bKey + '|' + sKey;
@@ -1337,7 +1359,7 @@ async function getTerrainSources(opts, onProgress, signal, key) {
   if (wantWater) rasterizeWaterRings(rings, bounds, elevation.W, elevation.D, elevation.VW, elevation.VD, osmWater);
   // Records whether osmWater holds real data. Re-enabling water on a source built
   // without it is the one case that genuinely needs a regenerate.
-  return { ...elevation, osmWater, buildings, waterFailed, waterFetched: wantWater };
+  return { ...elevation, osmWater, buildings, landcover, waterFailed, waterFetched: wantWater };
 }
 
 async function buildModel(opts, onProgress, signal, key) {
@@ -1363,6 +1385,55 @@ async function buildModel(opts, onProgress, signal, key) {
    build time, so editing a boundary is a pure recolor.
    ============================================================================ */
 const BAND_IDS = ['col0', 'col1', 'col2', 'col3'];
+const LAND_IDS = ['landWater', 'landForest', 'landGrass', 'landOther'];
+const landMode = () => $('colorMode').value === 'landcover';
+const landColors = () => Object.fromEntries(TopoLandcover.CATEGORIES.map((key, i) => [key, $(LAND_IDS[i]).value]));
+function renderColorModeUI() {
+  $('elevationColors').hidden = landMode();
+  $('landcoverColors').hidden = !landMode();
+  $('hintBands').hidden = landMode();
+  $('waterAutoRow').hidden = landMode() || !waterOn();
+  const models = state.models.filter(m => m.opts.colorMode === 'landcover');
+  $('landcoverStatus').textContent = models.length ? models.map(m => t('landcoverCoverage', {
+    n: m.landcoverInfo.vegetationPercent.toFixed(1), skipped: m.landcoverInfo.invalid || 0,
+  })).join(' / ') : t('landcoverPending');
+}
+/* Each mode carries its own water settings: the level that frames a coastline for
+   land types is rarely the one that puts a band edge where you want it. */
+function applyColorMode(mode) {
+  state.colorSettings[state.colorMode] = { level: state.waterLevelM, enabled: waterOn(), flatten: $('waterFlatten').checked, auto: $('waterAuto').checked };
+  state.colorMode = $('colorMode').value = mode;
+  const saved = state.colorSettings[mode] || { level: 0.3, enabled: true, flatten: false, auto: true };
+  state.waterLevelM = saved.level; $('waterLevel').value = saved.level; $('waterLevelVal').textContent = fmtLevel(saved.level);
+  $('waterEnabled').checked = saved.enabled; $('waterFlatten').checked = saved.flatten; $('waterAuto').checked = saved.auto;
+  renderColorModeUI(); renderWaterUI(); updateLegend();
+}
+/* The area and geometry ceilings are permanent for this selection — Generate can
+   only fail the same way again — and a picker left on land types goes on blocking
+   every later build, terrain included, while the panel advertises colours the model
+   does not have. Put the control back where the model actually is. A failed lookup
+   is the opposite case: that one is worth retrying, so it stays put. */
+const LANDCOVER_CLOSED = ['errLandcoverArea', 'errLandcoverLimit'];
+function revertColorMode(code) {
+  if (!landMode() || !LANDCOVER_CLOSED.includes(code)) return;
+  /* A land-type model already on screen keeps the picker that describes it: there
+     the ceiling was hit by a NEW selection, and swapping to bands would leave the
+     panel disagreeing with the preview rather than agreeing with it. The message
+     already says to shrink the area or change mode. */
+  if (state.model?.opts.colorMode === 'landcover') return;
+  applyColorMode('elevation');
+}
+$('colorMode').addEventListener('change', () => {
+  applyColorMode($('colorMode').value);
+  cancelActiveWork();
+  if (state.models.length || generationController) scheduleGeometryRebuild(0);
+});
+for (const id of LAND_IDS) $(id).addEventListener('input', () => {
+  const colors = landColors();
+  for (const m of state.models) if (m.opts.colorMode === 'landcover') m.materialColors = { ...colors };
+  modelGroup?.traverse(obj => { if (obj.userData.landCategory) obj.material.color.set(colors[obj.userData.landCategory]); });
+  updateLegend();
+});
 const WATER_HEX = '#3b7bd4';   // #colWater default, and the fallback before boot
 const MIN_BAND_MM = 0.3;       // ~1.5 layers: thinner than this will not print
 
@@ -1428,7 +1499,7 @@ function reconcileBands(model) {
 
 /* state.bands (metres) → the model's derived cache (model mm). */
 function syncBandsToModel(model) {
-  if (!model) return;
+  if (!model || model.opts.colorMode === 'landcover') return;
   const b = state.bands, g = model.grid;
   model.NB = b.nb;
   model.landMin = b.landMin;
@@ -1451,6 +1522,10 @@ function aggregateModels(models) {
 }
 
 function reconcileAllModels(models) {
+  if (models[0]?.opts.colorMode === 'landcover') {
+    for (const model of models) model.materialColors = landColors();
+    return;
+  }
   const aggregate = aggregateModels(models);
   if (!aggregate) return;
   reconcileBands(aggregate);
@@ -1460,6 +1535,7 @@ function reconcileAllModels(models) {
 /* Fill each piece's vertex-color array from vertex height → band color.
    Water surfaces (lake/sea areas) override the band with the water color. */
 function recolorModel(model) {
+  if (model.opts.colorMode === 'landcover') return;
   const cols = currentBandColors();
   const wcol = hexToRgb(waterColor());
   const g = model.grid;
@@ -1486,6 +1562,10 @@ function recolorModel(model) {
    proportional one, or a 0.3 m level against 3000 m of relief would vanish. */
 const LEGEND_WATER_PCT = 14;
 function updateLegend() {
+  if (landMode()) {
+    $('legend').style.background = 'linear-gradient(90deg, ' + LAND_IDS.map((id, i) => `${$(id).value} ${i * 25}% ${(i + 1) * 25}%`).join(', ') + ')';
+    return;
+  }
   const b = state.bands, cols = activeBandIds().map(id => $(id).value);
   const stops = []; let at = 0;
   if (b.waterActive) { stops.push(waterColor() + ' 0 ' + LEGEND_WATER_PCT + '%'); at = LEGEND_WATER_PCT; }
@@ -1503,6 +1583,7 @@ function updateLegend() {
 /* Names, ranges and the cut inputs. Safe to call with no model — the rows then
    show placeholders. Skips the focused field so typing is never interrupted. */
 function refreshBandRanges() {
+  renderColorModeUI();
   const b = state.bands, off = 4 - b.nb, dp = cutDecimals();
   $('waterRow').hidden = !b.waterActive;
   if (b.waterActive) {
@@ -1584,7 +1665,7 @@ const flattenOn = () => $('waterFlatten').checked && waterOn();
 function renderWaterUI() {
   const on = waterOn();
   $('waterOpts').hidden = !on;
-  $('waterAutoRow').hidden = !on;
+  $('waterAutoRow').hidden = !on || landMode();
   $('hintWater').textContent = t(flattenOn() ? 'hintWaterFlat' : 'hintWater');
 }
 const refreshWaterHint = renderWaterUI;
@@ -1595,6 +1676,8 @@ const refreshWaterHint = renderWaterUI;
    debounce (a leading edge would burn a build on the "1" of "1200"). */
 let rebuildTimer = 0, rebuildPending = false;
 function scheduleGeometryRebuild(delay = 120) {
+  rebuildController?.abort();
+  if (landMode()) generationController?.abort();
   rebuildPending = true;
   clearTimeout(rebuildTimer);
   rebuildTimer = setTimeout(() => { rebuildTimer = 0; rebuildGeometryNow(); }, delay);
@@ -1611,11 +1694,28 @@ async function rebuildGeometryNow() {
   try {
     const models = [];
     for (const old of oldModels) {
-      const opts = { ...old.opts, waterLevelM: state.waterLevelM, waterEnabled: waterOn(),
+      const opts = { ...old.opts, colorMode: $('colorMode').value, waterLevelM: state.waterLevelM, waterEnabled: waterOn(),
         autoFallback: $('waterAuto').checked, flattenWater: flattenOn(), ...routeDimOpts() };
-      const model = await TopoWorker.run('build', { src: old.src, opts }, { signal: controller.signal,
+      let src = old.src;
+      if (opts.colorMode === 'landcover' && !['ok', 'empty'].includes(src.landcover?.status)) {
+        overlay(true, t('pgLandcover'));
+        src = { ...src, landcover: await TopoLandcover.fetchLandcover(opts.bounds, { signal: controller.signal }) };
+      }
+      if (opts.waterEnabled && src.waterFetched === false) {
+        const bKey = boundsKey(opts.bounds);
+        let rings = state.net.water.get(bKey);
+        if (!rings) {
+          rings = await fetchWaterRings(opts.bounds, controller.signal);
+          if (state.net.water.size >= 8) state.net.water.delete(state.net.water.keys().next().value);
+          state.net.water.set(bKey, rings);
+        }
+        const osmWater = new Uint8Array(src.VW * src.VD);
+        rasterizeWaterRings(rings, opts.bounds, src.W, src.D, src.VW, src.VD, osmWater);
+        src = { ...src, osmWater, waterFetched: true, waterFailed: false };
+      }
+      const model = await TopoWorker.run('build', { src, opts }, { signal: controller.signal,
         progress: (key, params) => overlay(true, t(key, params)) });
-      model.src = old.src;
+      model.src = src;
       model.regionId = old.regionId; model.regionIds = old.regionIds;
       model.regionName = old.regionName; model.exportName = old.exportName;
       model.frame = buildFrameIfWanted(model); models.push(model);
@@ -1625,7 +1725,10 @@ async function rebuildGeometryNow() {
     reconcileAllModels(models); showModels(models, true); updateLegend(); refreshBandUI(); updateModelStats(models);
   } catch (e) {
     if (e.name === 'AbortError') setStatusKey('stCancelled');
-    else setStatusKey(e.message.startsWith('err') ? e.message : 'errGeometryWorker', null, 'err');
+    else {
+      const code = e.message.startsWith('err') ? e.message : 'errGeometryWorker';
+      revertColorMode(code); setStatusKey(code, null, 'err');
+    }
   } finally {
     if (rebuildController === controller) {
       rebuildController = null; $('generate').disabled = false; overlay(false); setExportEnabled(!!state.models.length);
@@ -1645,7 +1748,7 @@ function onWaterSettingChange(echo) {
   if (!state.models.length) return;
   // flatten off → the geometry does not depend on the level at all, so the
   // cheap mask-only path is still exactly right
-  if (flattenOn()) { scheduleGeometryRebuild(echo ? 0 : 120); return; }
+  if (flattenOn() || landMode() || state.model?.opts.colorMode === 'landcover') { scheduleGeometryRebuild(echo ? 0 : 120); return; }
   for (const model of state.models) applyWaterLevel(model, state.waterLevelM, $('waterAuto').checked);
   reconcileAllModels(state.models);
   applyBands();
@@ -1674,7 +1777,7 @@ function onWaterEnabledChange() {
   if ($('generate').disabled) { scheduleGeometryRebuild(0); return; }
   if (!state.models.length) return;
   // flatten is baked into Hv at build time, so it cannot be undone in place
-  if ($('waterFlatten').checked) { scheduleGeometryRebuild(0); return; }
+  if ($('waterFlatten').checked || landMode() || state.model?.opts.colorMode === 'landcover') { scheduleGeometryRebuild(0); return; }
   for (const model of state.models) {
     model.waterOff = !on;
     applyWaterLevel(model, state.waterLevelM, $('waterAuto').checked);
@@ -1755,6 +1858,20 @@ function addModelToGroup(model, root) {
   const gap = model.routeMode === 'through' && model.routeJoin === 'continuous' ? 1 : 1.10;
 
   for (const P of model.pieces) {
+    if (model.opts.colorMode === 'landcover') {
+      const group = new THREE.Group();
+      for (const category of TopoLandcover.CATEGORIES) {
+        const src = model.materialMeshes[P.id].materials[category];
+        if (!src.pos.length) continue;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(src.pos, 3));
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute(src.nrm, 3));
+        const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ color: model.materialColors[category], shininess: 12 }));
+        mesh.userData.landCategory = category; group.add(mesh);
+      }
+      group.position.set((P.cx - cx) * (gap - 1), (P.cy - cy) * (gap - 1), 0); root.add(group);
+      continue;
+    }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(P.pos, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(P.nrm, 3));
@@ -2472,11 +2589,14 @@ async function buildBambuFiles(model) {
       res.push(`<base name="${name}" displaycolor="${color}FF"/>`);
       return filamentColors.length - 1;
     };
+    const mapped = model.opts.colorMode === 'landcover';
     const NB = model.NB;
     const bandNames = NB === 4 ? ['low', 'mid-low', 'mid-high', 'peak'] : ['low', 'mid', 'peak'];
     // water first: with it, this is 3 bands + water = one full AMS set
-    const waterPindex = model.hasWater ? addMat('water_blue', waterColor().toUpperCase()) : -1;
-    const bandPindex = activeBandIds().map((id, k) =>
+    const landPindex = mapped ? Object.fromEntries(TopoLandcover.CATEGORIES.map(category =>
+      [category, addMat(category, model.materialColors[category].toUpperCase())])) : null;
+    const waterPindex = !mapped && model.hasWater ? addMat('water_blue', waterColor().toUpperCase()) : -1;
+    const bandPindex = mapped ? [] : activeBandIds().map((id, k) =>
       addMat(`band${k + 1}_${bandNames[k]}`, $(id).value.toUpperCase()));
     const platePindex = model.frame ? addMat('plate', $('frameCol').value.toUpperCase()) : -1;
     const textPindex = (model.frame && model.frame.text)
@@ -2488,13 +2608,20 @@ async function buildBambuFiles(model) {
     for (const P of model.pieces) {
       const row = Math.floor(P.id / model.nx) + 1, col = P.id % model.nx + 1;
       const comp = [], parts = [];
+      if (mapped) {
+        for (const category of TopoLandcover.CATEGORIES) {
+          const name = `r${row}c${col}_${category}`, material = landPindex[category];
+          const xml = meshObjectXML(nextId, exportMeshes[P.id].materials[category].pos, material, name);
+          if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: material + 1 }); nextId++; }
+        }
+      }
       // this piece's water skin, listed first to match the sidebar order
-      if (model.hasWater) {
+      if (!mapped && model.hasWater) {
         const name = `r${row}c${col}_water`;
         const xml = meshObjectXML(nextId, exportMeshes[P.id].water, waterPindex, name);
         if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: waterPindex + 1 }); nextId++; }
       }
-      for (let b = 0; b < NB; b++) {
+      for (let b = 0; !mapped && b < NB; b++) {
         const name = `r${row}c${col}_band${b + 1}`;
         const xml = meshObjectXML(nextId, exportMeshes[P.id].bands[b], bandPindex[b], name);
         if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: bandPindex[b] + 1 }); nextId++; }
@@ -2609,7 +2736,7 @@ function setStatusKey(key, params, cls = '') { lastStatus = { key, params, cls }
 function overlay(on, text) { $('overlay').style.display = on ? 'grid' : 'none'; if (text) $('overlayText').textContent = text; }
 
 const generationInputs = ['area', 'areaX', 'areaY', 'lat', 'lon', 'res', 'detailPreset', 'nx', 'ny', 'vex', 'width', 'base',
-  'terrainSource', 'terrainKey', 'includeBuildings', 'buildingScale', 'routeMode', 'routeTop', 'routeJoin', 'printShape', 'frameStyle'];
+  'terrainSource', 'terrainKey', 'includeBuildings', 'buildingScale', 'routeMode', 'routeTop', 'routeJoin', 'printShape', 'frameStyle', 'colorMode'];
 function generationSignature() {
   // The key is deliberately excluded: its input event cancels active work.
   return JSON.stringify([currentAreaBounds(), currentPrintShape(), state.regionOutputMode, state.selectedRegions.map(r => r.id), currentRoutePts(),
@@ -2628,13 +2755,18 @@ function detailNotes(model) {
   if (info.status === 'ok' && !info.count) notes.push(t('noteBuildingEmpty'));
   if (info.invalid) notes.push(t('noteBuildingInvalid', { n: info.invalid }));
   if (model.src.waterFailed) notes.push(t('noteWaterFailed'));
+  if (model.opts.colorMode === 'landcover') {
+    notes.push(t('landcoverCoverage', { n: model.landcoverInfo.vegetationPercent.toFixed(1), skipped: model.landcoverInfo.invalid || 0 }));
+    if (model.landcoverInfo.status === 'empty') notes.push(t('landcoverEmpty'));
+  }
   return notes;
 }
 function modelSourceNotes(model) {
   const info = model.src.terrainInfo || {}, city = model.cityInfo || {};
   return t('readmeSources', { source: info.source || 'AWS Terrarium', tile: info.tileSpacing?.toFixed(2) || '—',
     mesh: info.meshSpacing?.toFixed(2) || '—', count: city.count || 0, estimated: city.estimated || 0 }) +
-    (info.attribution || '') + '\n' + detailNotes(model).join('\n') + '\n';
+    (info.attribution || '') + '\n' + detailNotes(model).join('\n') + '\n' +
+    (model.opts.colorMode === 'landcover' ? t('readmeLandcover') + '\n' : '');
 }
 function updateDetailStats(models) {
   const spacing = field => [...new Set(models.map(m => m.src.terrainInfo?.[field]).filter(Number.isFinite).map(n => n.toFixed(2)))].join(' / ');
@@ -2683,6 +2815,7 @@ async function generate() {
     const common = {
       detail: clamp(parseInt($('res').value, 10) || 400, 60, 1000),
       terrainProvider: $('terrainSource').value,
+      colorMode: $('colorMode').value,
       includeBuildings: $('includeBuildings').checked,
       buildingScale: parseFloat($('buildingScale').value),
       nx: clamp(parseInt($('nx').value, 10) || 1, 1, 8),
@@ -2773,7 +2906,10 @@ async function generate() {
     }
   } catch (e) {
     if (e.name === 'AbortError') setStatusKey('stCancelled');
-    else setStatusKey(e.code || (e.message.startsWith('err') ? e.message : 'errGenerate'), null, 'err');
+    else {
+      const code = e.code || (e.message.startsWith('err') ? e.message : 'errGenerate');
+      revertColorMode(code); setStatusKey(code, null, 'err');
+    }
   } finally {
     if (generationController === controller) generationController = null;
     overlay(false); btn.disabled = false; setExportEnabled(!!state.models.length);

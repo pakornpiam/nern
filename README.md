@@ -77,6 +77,51 @@ water asks you to press Generate rather than silently showing nothing. Note that
 between 3 and 4 bands changes how many boundaries there are, so your typed cuts reset to
 an even split and the app says so.
 
+## Colour mode
+
+**Elevation bands** is the default and is unchanged: height decides colour. **Real
+land types** throws that away and colours by what is actually on the ground, from
+OpenStreetMap. The AMS holds four materials either way, but now they are water,
+forest, grass/farmland, and other ground rather than a water slice plus altitude
+bands.
+
+`natural=wood` and `landuse=forest` become forest. `natural=grassland|scrub|heath`
+and `landuse=grass|meadow|farmland|orchard|vineyard|allotments` become grass/farmland.
+Everything else — streets, bare rock, roofs, and every square metre nobody has
+tagged — is other ground. Water is not looked up separately: it reuses the mask the
+water layer already builds, so turning the water layer off drops the blue and hands
+those cells to whatever land type covers them, and the water level still moves the
+shoreline. Where water and vegetation overlap, water wins.
+
+This is mapped data, not imagery. A hillside with no forest polygon prints as other
+ground because nobody drew it, not because it is bare, and the coverage note under
+the colour pickers reports the mapped share so you can judge that before printing.
+Rural areas outside Europe are frequently blank.
+
+The colours are a 0.8 mm skin on top of an other-ground body, cut from the finished
+piece so buildings, routes, and jigsaw seams stay exactly where they were. Two
+consequences are worth knowing. The skin never eats into the last 1 mm above the
+build plate, so on a model whose lowest ground sits under 1.8 mm the colour layer
+there is thinner than 0.8 mm, or absent. And buildings print in the other-ground
+colour: the skin is cut away from their footprints so the walls stay one solid
+material rather than gaining a coloured cap.
+
+Boundaries snap to terrain cells, so **Terrain detail** sets the smallest patch that
+can appear — at detail 400 on a 180 mm print a cell is 0.45 mm, and a copse narrower
+than that either disappears or claims a whole cell. Raise detail before blaming the
+data.
+
+Requests are capped at 1,000 km² per model, 10,000 features, and 200,000 vertices.
+Past any of those the mode is not available for that selection at all, so the app names
+the ceiling you hit and puts the colour picker back on elevation bands. Retrying cannot
+shrink a selection, and a picker left on land types would go on failing every Generate
+after it — terrain included — while the panel advertised colours the model did not have.
+Shrink the box and the mode is available again. A lookup that *fails* is the opposite
+case: the area was fine and the network was not, so land types stays selected, your
+existing model is kept rather than replaced with a half-coloured one, and Generate
+retries. Results are cached per selection, so switching modes back and forth restamps
+from cached data without another Overpass round-trip.
+
 ## Route dimensions
 
 **Route width**, **Groove depth** / **Ridge height**, and — for the full-depth route —
