@@ -56,6 +56,12 @@ ratio the short side reaches the 60-sample floor and cells stop being square.
 prints 180 × 45 mm rather than overrunning the plate. Circle and hex print shapes
 inscribe themselves in the rectangle, so a circle becomes an ellipse.
 
+Puzzle tabs scale to the shorter side of each piece and leave room between
+neighboring tabs. This keeps the tabs and corners attached when the preview
+spreads the pieces apart, including stretched selections and low-detail grids.
+Regenerate existing models to use the corrected seams; exported pieces use the
+same boundaries as the preview.
+
 ## Water layer
 
 **Enable water layer** is on by default and behaves as it always did: everything at or

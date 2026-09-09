@@ -952,3 +952,61 @@ test('each land type spreads on its own, from cached data, without moving the wa
   expect(overpass.calls).toBe(1);
   expect(errors).toEqual([]);
 });
+
+test('separated puzzle pieces keep their tabs and surface coverage in both color modes', async ({ page }) => {
+  const errors = await setup(page);
+  await routeLandcover(page);
+  await installFixture(page, { samples: 40, nx: 4 });
+  await page.locator('#ny').fill('4');
+  await page.locator('#includeBuildings').uncheck();
+  await page.locator('#waterEnabled').uncheck();
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  const checkPreview = async () => page.evaluate(() => {
+    const model = state.model, g = model.grid, seen = new Uint8Array(g.W * g.D);
+    const components = Array(model.pieces.length).fill(0);
+    for (let k = 0; k < seen.length; k++) {
+      if (seen[k] || !g.cellShape[k]) continue;
+      const id = g.piece[k], queue = [k]; seen[k] = 1; components[id]++;
+      for (let cursor = 0; cursor < queue.length; cursor++) {
+        const v = queue[cursor], x = v % g.W, y = Math.floor(v / g.W);
+        for (const n of [x > 0 ? v - 1 : -1, x + 1 < g.W ? v + 1 : -1, y > 0 ? v - g.W : -1, y + 1 < g.D ? v + g.W : -1]) {
+          if (n >= 0 && !seen[n] && g.cellShape[n] && g.piece[n] === id) { seen[n] = 1; queue.push(n); }
+        }
+      }
+    }
+    modelGroup.updateMatrixWorld(true);
+    const root = modelGroup.children[0], ray = new THREE.Raycaster();
+    let missing = 0, checked = 0, shifted = 0;
+    for (const piece of model.pieces) {
+      const child = root.children[piece.id], pos = piece.pos;
+      if (child.position.lengthSq() > 0) shifted++;
+      const stride = Math.max(1, Math.floor(pos.length / 9 / 100));
+      for (let k = 0; k < pos.length; k += stride * 9) {
+        const a = new THREE.Vector3(...pos.slice(k, k + 3));
+        const b = new THREE.Vector3(...pos.slice(k + 3, k + 6));
+        const c = new THREE.Vector3(...pos.slice(k + 6, k + 9));
+        const normal = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
+        if (normal.lengthSq() < .5) continue;
+        const point = a.add(b).add(c).multiplyScalar(1 / 3).applyMatrix4(child.matrixWorld);
+        ray.set(point.clone().addScaledVector(normal, .05), normal.clone().negate());
+        ray.near = 0; ray.far = .1;
+        const hits = ray.intersectObject(child, true); checked++;
+        if (!hits.length || Math.abs(hits[0].distance - .05) > .003) missing++;
+      }
+    }
+    return { components, shifted, checked, missing };
+  });
+  for (const mode of ['elevation', 'landcover']) {
+    if (mode === 'landcover') {
+      await page.selectOption('#colorMode', mode);
+      await expect.poll(() => page.evaluate(() => !rebuildController && state.model.opts.colorMode)).toBe(mode);
+    }
+    const result = await checkPreview();
+    expect(result.components).toEqual(Array(16).fill(1));
+    expect(result.shifted).toBe(16);
+    expect(result.checked).toBeGreaterThan(1000);
+    expect(result.missing).toBe(0);
+  }
+  expect(errors).toEqual([]);
+});
