@@ -137,16 +137,37 @@ can appear — at detail 400 on a 180 mm print a cell is 0.45 mm, and a copse na
 than that either disappears or claims a whole cell. Raise detail before blaming the
 data.
 
-Glaciers are large, vertex-dense multipolygons, so an alpine selection now pulls far
-more geometry than the same box did before snow existed; a selection that used to
-succeed can hit the vertex ceiling below.
+Glaciers are large, vertex-dense multipolygons, so an alpine selection pulls far more
+geometry than the same box did before snow existed.
 
-Requests are capped at 1,000 km² per model, 10,000 features, and 200,000 vertices.
+### Large selections
+
+Land types are available for anything the area box can draw, up to 15,000 km². A single
+Overpass request cannot answer a box that size — it exceeds the server's own query
+timeout and comes back empty about 25 seconds later — so the request is split into tiles
+of roughly 1,000 km² and run two at a time, which is what the public service allows per
+address. A full 120 × 120 km selection is sixteen requests and takes appreciably longer
+than a small one; the progress overlay counts them off.
+
+If a tile fails, its ground is simply missing rather than the whole build dying: the
+model is made from the tiles that answered and the details panel says how many are
+absent. Gaps are never cached, so pressing Generate again really does go back for them.
+
+Two things get dropped at scale, both deliberately. Mapped areas smaller than one
+terrain cell cannot be drawn at any detail setting, so they are discarded before they
+are ever loaded — which is what keeps the budgets below reachable. And because land
+types are sampled at cell centres, a wood smaller than a cell either claims the whole
+cell or vanishes: at 15,000 km² and the default detail 400 a cell is about 300 m across,
+so the result is coarse. The details panel reports the cell size; raise **Terrain
+detail** for finer land types, at the cost of a slower build.
+
+Requests are capped at 15,000 km² per model, 40,000 features, and 800,000 vertices.
 Past any of those the mode is not available for that selection at all, so the app names
 the ceiling you hit and puts the colour picker back on elevation bands. Retrying cannot
 shrink a selection, and a picker left on land types would go on failing every Generate
 after it — terrain included — while the panel advertised colours the model did not have.
-Shrink the box and the mode is available again. A lookup that *fails* is the opposite
+Shrink the box and the mode is available again — in practice only a selected region can
+exceed the ceiling, since the area box stops below it. A lookup that *fails* is the opposite
 case: the area was fine and the network was not, so land types stays selected, your
 existing model is kept rather than replaced with a half-coloured one, and Generate
 retries. Results are cached per selection, so switching modes back and forth restamps
