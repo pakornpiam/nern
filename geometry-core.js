@@ -152,19 +152,23 @@ function shapeInsideFn(style, hw, hh) {
    ============================================================================ */
 function buildPartition(W, D, nx, ny) {
   const cwC = W / nx, chC = D / ny;               // cells per piece
-  const neckHalf = 0.10, headR = 0.185, neckLen = 0.16, headOff = 0.24; // fractions of cell-block
+  // Use one physical scale for both axes so a stretched piece's tab head still
+  // joins its neck. The head radius also leaves clearance between perpendicular
+  // tabs near a corner, preventing detached diagonal pieces at their overlap.
+  const tabScale = Math.min(cwC, chC);
+  const neckHalf = 0.075, headR = 0.13, neckLen = 0.14, headOff = 0.18;
 
   // Tab that straddles a vertical boundary (between columns) at bx, centered cy.
-  function inColTab(x, y, bx, cy, dir, seg) {
-    const nh = neckHalf * seg, hr = headR * seg, nl = neckLen * cwC, ho = headOff * cwC;
+  function inColTab(x, y, bx, cy, dir) {
+    const nh = neckHalf * tabScale, hr = headR * tabScale, nl = neckLen * tabScale, ho = headOff * tabScale;
     const dx = (x - bx) * dir; // >0 means on the "into neighbor" side
     const inNeck = dx >= -0.001 && dx <= nl && Math.abs(y - cy) <= nh;
     const hcx = bx + dir * ho;
     const inHead = dx >= -0.001 && ((x - hcx) ** 2 + (y - cy) ** 2) <= hr * hr;
     return inNeck || inHead;
   }
-  function inRowTab(x, y, by, cx, dir, seg) {
-    const nh = neckHalf * seg, hr = headR * seg, nl = neckLen * chC, ho = headOff * chC;
+  function inRowTab(x, y, by, cx, dir) {
+    const nh = neckHalf * tabScale, hr = headR * tabScale, nl = neckLen * tabScale, ho = headOff * tabScale;
     const dy = (y - by) * dir;
     const inNeck = dy >= -0.001 && dy <= nl && Math.abs(x - cx) <= nh;
     const hcy = by + dir * ho;
@@ -188,8 +192,9 @@ function buildPartition(W, D, nx, ny) {
         // owner: alternate which side the tab pokes from
         const ownerLeft = ((k + rSeg) & 1) === 0;
         const dir = ownerLeft ? 1 : -1;      // poke direction from owner into other
-        if (inColTab(x, y, bx, cy, dir, chC)) px = ownerLeft ? k - 1 : k;
-        else px = x < bx ? k - 1 : k;
+        // px already owns the ordinary rectangular cell. A later boundary must
+        // not reset a tab assigned by an earlier one back to that rectangle.
+        if (inColTab(x, y, bx, cy, dir)) { px = ownerLeft ? k - 1 : k; break; }
       }
       // Horizontal boundaries: perturb row.
       for (let k = 1; k < ny; k++) {
@@ -199,8 +204,7 @@ function buildPartition(W, D, nx, ny) {
         const cx = (cSeg + 0.5) * cwC;
         const ownerTop = ((k + cSeg) & 1) === 0;
         const dir = ownerTop ? 1 : -1;
-        if (inRowTab(x, y, by, cx, dir, cwC)) py = ownerTop ? k - 1 : k;
-        else py = y < by ? k - 1 : k;
+        if (inRowTab(x, y, by, cx, dir)) { py = ownerTop ? k - 1 : k; break; }
       }
       piece[j * W + i] = py * nx + px;
     }
