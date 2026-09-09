@@ -36,13 +36,27 @@ test('multipolygons stitch member ways, keep holes, deduplicate and report malfo
     { type: 'way', ref: 11, role: 'inner', geometry: hole.geometry },
   ] };
   const broken = forest(13); broken.geometry.pop();
-  const data = L.normalize([outside, hole, relation, broken]);
+  const data = L.normalize([outside, relation, broken]);
   assert.equal(data.features.length, 1); assert.equal(data.invalid, 1);
-  const [f, o] = [L.CODE.forest, L.OTHER];
+  const [f, g, o] = [L.CODE.forest, L.CODE.grass, L.OTHER];
+  // An untagged hole stays a hole.
   assert.deepEqual([...L.classify(data, bounds, 4, 4)], [f, f, f, f, f, o, o, f, f, o, o, f, f, f, f, f]);
+
+  /* A clearing carrying its own tag paints itself. The relation punches it out, and OSM's
+     standard idiom is for that inner way to say what the clearing actually is -- consuming
+     it left the ground painted by nobody, a hole in the middle of a wood. */
+  const clearing = feature(11, rectangle(0.0005, 0.0005, 0.0015, 0.0015), { landuse: 'meadow' });
+  const cleared = L.normalize([outside, relation, clearing]);
+  assert.deepEqual(cleared.features.map(x => x.id).sort(), ['relation/9', 'way/11']);
+  assert.deepEqual([...L.classify(cleared, bounds, 4, 4)], [f, f, f, f, f, g, g, f, f, g, g, f, f, f, f, f]);
+
+  /* A hole that cannot be stitched costs the hole, not the forest around it -- the same
+     tolerance buildings.js gives its own orphan holes. */
   const invalidRelation = { ...relation, members: [...relation.members, { type: 'way', ref: 99, role: 'inner' }] };
   const fallback = L.normalize([invalidRelation, outside]);
-  assert.equal(fallback.invalid, 1); assert.equal(fallback.features[0].id, 'way/10');
+  assert.equal(fallback.invalid, 1);
+  assert.equal(fallback.features[0].id, 'relation/9');
+  assert.equal(fallback.features.length, 1);   // way/10 is still consumed as its outer ring
 });
 
 test('land-cover requests skip disabled mode, cache successes and empty results, retry failures', async () => {
@@ -114,7 +128,8 @@ test('colored surfaces reconstruct terrain and buildings without overlap across 
           const solid = fromSoup(api, mesh.pos); owned.push(solid); solids.push(solid);
           assert.ok(solid.volume() > 0, JSON.stringify(opts));
           if (category !== 'other') {
-            for (let k = 2; k < mesh.pos.length; k += 3) assert.ok(mesh.pos[k] >= 1 - 1e-5);
+            const floor = model.landcoverInfo.skinFloorZ;
+            for (let k = 2; k < mesh.pos.length; k += 3) assert.ok(mesh.pos[k] >= floor - 1e-5);
             if (model.citySolids?.[piece.id]) {
               const buildings = fromSoup(api, model.citySolids[piece.id]), intersection = solid.intersect(buildings);
               assert.ok(intersection.volume() < 1e-4); intersection.delete(); buildings.delete();
@@ -207,14 +222,60 @@ test('a large selection is split into tiles, merged once, and deduplicated', asy
   assert.equal(data.features.length, 1);
 });
 
+const bboxOf = init => decodeURIComponent(init.body).match(/\((-?[\d.]+),(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)\)/)[0];
+
+test('a transient tile failure is retried rather than costing a rectangle of land', async () => {
+  /* One 429 used to drop a whole tile silently -- half the map on a two-tile selection.
+     Overpass rate-limits routinely, so the first attempt failing must not be the end of it. */
+  const big = [[40, 40], [41, 41]];
+  const total = L.tileBoxes(big).length;
+  const wood = feature(1, rectangle(40.1, 40.1, 40.2, 40.2), { natural: 'wood' });
+  const seen = new Map();
+  const healed = await L.fetchLandcover(big, { fetcher: async (_url, init) => {
+    const key = bboxOf(init), n = (seen.get(key) || 0) + 1; seen.set(key, n);
+    if (n === 1) return { ok: false, status: 429 };             // every tile 429s once
+    return { ok: true, json: async () => ({ elements: [wood] }) };
+  } });
+  assert.equal(healed.status, 'ok');
+  assert.equal(healed.missing, 0);
+  assert.equal(seen.size, total);
+  // A 400 is the query being wrong, which a retry cannot mend, so it is not retried.
+  const tries = new Map();
+  await assert.rejects(L.fetchLandcover([[41, 41], [42, 42]], { fetcher: async (_url, init) => {
+    const key = bboxOf(init); tries.set(key, (tries.get(key) || 0) + 1);
+    return { ok: false, status: 400 };
+  } }), /errLandcoverFetch/);
+  assert.deepEqual([...new Set(tries.values())], [1]);
+});
+
+test('a timed-out tile keeps the ground it did return', async () => {
+  /* Overpass answers a server-side timeout with 200, a remark, AND the elements it managed
+     to collect -- often most of them. Throwing that away lost ground it had already sent. */
+  const big = [[50, 50], [51, 51]];
+  const total = L.tileBoxes(big).length;
+  const wood = feature(1, rectangle(50.1, 50.1, 50.4, 50.4), { natural: 'wood' });
+  const truncated = await L.fetchLandcover(big, { fetcher: async () => ({ ok: true,
+    json: async () => ({ remark: 'runtime error: Query timed out', elements: [wood] }) }) });
+  assert.equal(truncated.status, 'partial');    // kept, but the gap is still declared
+  assert.equal(truncated.missing, total);
+  assert.ok(truncated.features.length > 0);
+  // A remark with nothing attached is a plain failure.
+  await assert.rejects(L.fetchLandcover([[51, 51], [52, 52]], { fetcher: async () => ({ ok: true,
+    json: async () => ({ remark: 'runtime error', elements: [] }) }) }), /errLandcoverFetch/);
+});
+
 test('a failed tile leaves a gap the caller can see, and is never cached', async () => {
   const big = [[20, 20], [21, 21]];
   const total = L.tileBoxes(big).length;
+  assert.ok(total > 1);
   const wood = id => feature(id, rectangle(20.1, 20.1, 20.2, 20.2), { natural: 'wood' });
-  let calls = 0;
-  const flaky = async () => {
+  // One tile is down for good -- retries cannot save it, so the gap is real.
+  let dead = null, calls = 0;
+  const flaky = async (_url, init) => {
     calls++;
-    if (calls === 1) throw new Error('overpass 429');
+    const key = bboxOf(init);
+    if (dead === null) dead = key;
+    if (key === dead) throw new Error('overpass down');
     return { ok: true, json: async () => ({ elements: [wood(calls)] }) };
   };
   const partial = await L.fetchLandcover(big, { fetcher: flaky });
@@ -323,4 +384,36 @@ test('spreading raises what is painted without touching what was mapped', async 
   assert.ok(forestOnly.landcoverInfo.coloredPercent < spread.landcoverInfo.coloredPercent);
   // All zeroes is off, whichever shape it arrives in.
   assert.equal((await build({ landGrowCells: { forest: 0 } }, {}, sparse)).landcoverInfo.coloredPercent, null);
+});
+
+test('a thin base and a route bed keep their land colour', async () => {
+  /* The skin used to be trimmed at a fixed z >= 1, which is exactly MIN_ROUTE_FLOOR. A flat
+     through route follows the lowest ground by definition, so its bed came out with no
+     colour at the DEFAULT base -- and a 1 mm base lost its colour wherever the ground sat
+     near the model minimum. Nothing caught it: the leftover "other" is the complement, so a
+     piece whose colours all vanished still reconstructs perfectly. */
+  const { kernel, fromSoup } = await import('../geometry-city.mjs'), api = await kernel();
+  const volumeOf = mesh => {
+    if (!mesh.pos.length) return 0;
+    const solid = fromSoup(api, mesh.pos);
+    try { return solid.volume(); } finally { solid.delete(); }
+  };
+  // No water, so the fixture's lowest columns are forest rather than lake.
+  const thick = await build({ baseMM: 3 }, { water: false });
+  const thin = await build({ baseMM: 1 }, { water: false });
+  assert.ok(thick.landcoverInfo.skinFloorZ <= thick.grid.baseMM - 0.2);
+  assert.ok(thin.landcoverInfo.skinFloorZ <= thin.grid.baseMM - 0.2);
+  // The colour is a surface skin: how thick the base is underneath must not consume it.
+  const full = volumeOf(thick.materialMeshes[0].materials.forest);
+  assert.ok(full > 0);
+  assert.ok(volumeOf(thin.materialMeshes[0].materials.forest) > full * 0.9,
+    `thin base kept ${volumeOf(thin.materialMeshes[0].materials.forest)} of ${full}`);
+
+  // The bed of a flat through route is the lowest surface that still has to be coloured.
+  const routed = await build({ routeMode: 'through', routeProfile: 'flat',
+    routePath: [[0, 0.001], [0.002, 0.001]] }, { water: false });
+  assert.ok(routed.grid.routeFloorZ > 0);
+  assert.ok(routed.landcoverInfo.skinFloorZ < routed.grid.routeFloorZ,
+    `skin floor ${routed.landcoverInfo.skinFloorZ} must sit below the route bed ${routed.grid.routeFloorZ}`);
+  assert.ok(volumeOf(routed.materialMeshes[0].materials.forest) > 0);
 });

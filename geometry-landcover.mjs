@@ -111,6 +111,13 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
      quoted as what OSM actually mapped, and growth must not quietly inflate it. After
      water because growth writes only into unmapped ground, which is what leaves the
      shoreline exactly where the water mask put it. */
+  /* Leave solid material under the colour, but never so much that no colour is left. The
+     old fixed 1 mm was exactly MIN_ROUTE_FLOOR, so a flat through route -- which follows the
+     LOWEST ground by nature -- had its bed trimmed to nothing at the DEFAULT base, and a
+     1 mm base lost its colour everywhere the ground sat near the model minimum. Trim just
+     under the lowest surface that actually has to carry colour instead. */
+  const lowestSurface = Math.min(g.baseMM, g.routeFloorZ > 0 ? g.routeFloorZ : Infinity);
+  const skinFloorZ = Math.max(0.2, Math.min(1, lowestSurface - 0.2));
   const grow = model.opts?.landGrowCells;
   const rounds = Array.from({ length: OTHER + 1 }, (_, c) => (c <= CODE.water || c >= OTHER) ? 0
     : Math.max(0, Math.min(MAX_GROW, (typeof grow === 'number' ? grow : grow?.[CATEGORIES[c]]) | 0)));
@@ -126,7 +133,7 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
   model.landcoverInfo = { status: data.status, invalid: data.invalid,
     vegetationPercent: pct(counts[CODE.forest] + counts[CODE.grass]),
     snowPercent: pct(counts[CODE.snow]), hasSnow: counts[CODE.snow] > 0, snowLineM: snowLine,
-    mappedPercent: pct(mapped), coloredPercent: growing ? pct(colored) : null,
+    mappedPercent: pct(mapped), coloredPercent: growing ? pct(colored) : null, skinFloorZ,
     growCells: Object.fromEntries(CATEGORIES.slice(1, OTHER).map(c => [c, rounds[CODE[c]]])),
     missing: data.missing || 0, tiles: data.tiles || 1 };
   model.materialMeshes = [];
@@ -165,7 +172,7 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
           const lowered = keep(terrain.translate([0, 0, -0.8]));
           // Use the fused top surface, whose vertices have already made the city's
           // float32 round trip, so the skin and remainder share exactly that top.
-          let shell = keep(keep(fused.subtract(lowered)).trimByPlane([0, 0, 1], 1));
+          let shell = keep(keep(fused.subtract(lowered)).trimByPlane([0, 0, 1], skinFloorZ));
           if (model.citySolids?.[piece.id]?.length) shell = keep(shell.subtract(solidOf(model.citySolids[piece.id])));
           // The skin already lies inside the fused piece, so each domain's slice of it
           // is the finished part; the leftover keeps everything the merged skin misses.
