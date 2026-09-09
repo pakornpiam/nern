@@ -246,12 +246,25 @@
       <div id="landcoverColors" hidden>
         <div class="band-list" style="margin-top:8px">
           <div class="band-row"><input id="landWater" type="color" value="#3b7bd4" /><label for="landWater" data-i18n="landWater">Water</label></div>
+          <!-- Snow only earns a filament slot when the selection actually has some, so
+               this row stays hidden until a built model reports snow cells. -->
+          <div class="band-row" id="landSnowRow" hidden><input id="landSnow" type="color" value="#eef3f8" /><label for="landSnow" data-i18n="landSnow">Snow / ice</label></div>
           <div class="band-row"><input id="landForest" type="color" value="#315c38" /><label for="landForest" data-i18n="landForest">Forest</label></div>
           <div class="band-row"><input id="landGrass" type="color" value="#91ad62" /><label for="landGrass" data-i18n="landGrass">Grass / farmland</label></div>
           <div class="band-row"><input id="landOther" type="color" value="#c3aa80" /><label for="landOther" data-i18n="landOther">Other ground / buildings</label></div>
         </div>
+        <!-- Wrapped like #waterOpts so the altitude, its echo and the hint hide as one
+             unit. Sitting inside #landcoverColors also keeps it out of elevation mode,
+             where the top band already IS the snow band. -->
+        <label class="band-check" style="margin-top:8px"><input id="snowLineEnabled" type="checkbox" /><span data-i18n="lblSnowLineEnabled">Add a snow line</span></label>
+        <div id="snowLineOpts" hidden>
+          <label class="row" for="snowLine"><span data-i18n="lblSnowLine">Snow line</span> <span class="val"><span id="snowLineVal">2500</span> <span data-i18n="unitM">m</span></span></label>
+          <input id="snowLine" type="number" min="-500" max="9000" step="10" value="2500" />
+        </div>
+        <div class="hint" id="hintSnowLine"></div>
         <div class="hint" data-i18n="hintLandcover">Mapped land types form a 0.8 mm surface over the other-ground color. Unmapped ground and buildings use that color too. Detail controls the smallest mapped features shown.</div>
         <div class="hint" id="landcoverStatus" role="status"></div>
+        <div class="hint" id="hintLandcoverSlots"></div>
       </div>
       <div class="hint" id="hintBands"></div>
     </div>
@@ -394,6 +407,8 @@ const state = {
   waterLevelM: 0.3, // mirrors #waterLevel; everything at or below prints as water
   colorMode: 'elevation',
   colorSettings: {},
+  snowLineM: 2500,  // mirrors #snowLine; metres above sea level, land-type mode only
+
   net: { elevation: new Map(), water: new Map() },
   /* Authoritative elevation-band boundaries, in METRES. The model's zCuts are a
      derived cache. These boot values make updateLegend() emit the same four even
@@ -1385,18 +1400,36 @@ async function buildModel(opts, onProgress, signal, key) {
    build time, so editing a boundary is a pure recolor.
    ============================================================================ */
 const BAND_IDS = ['col0', 'col1', 'col2', 'col3'];
-const LAND_IDS = ['landWater', 'landForest', 'landGrass', 'landOther'];
+/* Derived, never hand-maintained: landColors() zips these against CATEGORIES BY INDEX,
+   so a hand-written array one entry out of step would mislabel every colour silently. */
+const LAND_IDS = TopoLandcover.CATEGORIES.map(c => 'land' + c[0].toUpperCase() + c.slice(1));
 const landMode = () => $('colorMode').value === 'landcover';
+const snowActive = () => state.models.some(m => m.opts.colorMode === 'landcover' && m.landcoverInfo?.hasSnow);
+const snowOpts = () => ({ snowLineM: $('snowLineEnabled').checked ? state.snowLineM : null });
+/* The one predicate shared by the 3MF exporter, the slot hint and the export overlay:
+   a category with no geometry anywhere earns no material and no AMS slot. */
+const usedLandCategories = (model, meshes) => TopoLandcover.CATEGORIES.filter(c =>
+  model.pieces.some(P => meshes[P.id]?.materials[c].pos.length));
 const landColors = () => Object.fromEntries(TopoLandcover.CATEGORIES.map((key, i) => [key, $(LAND_IDS[i]).value]));
 function renderColorModeUI() {
   $('elevationColors').hidden = landMode();
   $('landcoverColors').hidden = !landMode();
   $('hintBands').hidden = landMode();
   $('waterAutoRow').hidden = landMode() || !waterOn();
+  $('landSnowRow').hidden = !snowActive();
+  $('snowLineOpts').hidden = !$('snowLineEnabled').checked;
+  $('snowLineVal').textContent = String(state.snowLineM);
+  $('hintSnowLine').textContent = t('hintSnowLine');
   const models = state.models.filter(m => m.opts.colorMode === 'landcover');
   $('landcoverStatus').textContent = models.length ? models.map(m => t('landcoverCoverage', {
     n: m.landcoverInfo.vegetationPercent.toFixed(1), skipped: m.landcoverInfo.invalid || 0,
-  })).join(' / ') : t('landcoverPending');
+  }) + (m.landcoverInfo.snowPercent > 0 ? ' ' + t('landcoverSnow', { n: m.landcoverInfo.snowPercent.toFixed(1) }) : '')
+  ).join(' / ') : t('landcoverPending');
+  // Land mode hides #hintBands, so without this the print's slot count goes unstated.
+  const used = models.length ? usedLandCategories(models[0], models[0].materialMeshes) : [];
+  $('hintLandcoverSlots').textContent = used.length
+    ? t('hintLandcoverSlots', { n: used.length }) + (used.includes('snow') ? ' ' + t('landcoverSnowSlots') : '')
+    : '';
 }
 /* Each mode carries its own water settings: the level that frames a coastline for
    land types is rarely the one that puts a band edge where you want it. */
@@ -1563,7 +1596,14 @@ function recolorModel(model) {
 const LEGEND_WATER_PCT = 14;
 function updateLegend() {
   if (landMode()) {
-    $('legend').style.background = 'linear-gradient(90deg, ' + LAND_IDS.map((id, i) => `${$(id).value} ${i * 25}% ${(i + 1) * 25}%`).join(', ') + ')';
+    /* Snow is the only category dropped when absent: before any model exists there is
+       nothing to ask, and dropping water the moment a desert has none would be a far
+       bigger change than snow warrants. Trailing zeros trimmed so an even split still
+       reads "25%" rather than "25.000%". */
+    const cats = TopoLandcover.CATEGORIES.filter(c => c !== 'snow' || snowActive());
+    const step = 100 / cats.length, pct = v => String(+v.toFixed(3));
+    $('legend').style.background = 'linear-gradient(90deg, ' + cats.map((c, i) =>
+      `${$('land' + c[0].toUpperCase() + c.slice(1)).value} ${pct(i * step)}% ${i === cats.length - 1 ? 100 : pct((i + 1) * step)}%`).join(', ') + ')';
     return;
   }
   const b = state.bands, cols = activeBandIds().map(id => $(id).value);
@@ -1695,7 +1735,7 @@ async function rebuildGeometryNow() {
     const models = [];
     for (const old of oldModels) {
       const opts = { ...old.opts, colorMode: $('colorMode').value, waterLevelM: state.waterLevelM, waterEnabled: waterOn(),
-        autoFallback: $('waterAuto').checked, flattenWater: flattenOn(), ...routeDimOpts() };
+        autoFallback: $('waterAuto').checked, flattenWater: flattenOn(), ...routeDimOpts(), ...snowOpts() };
       let src = old.src;
       if (opts.colorMode === 'landcover' && !['ok', 'empty'].includes(src.landcover?.status)) {
         overlay(true, t('pgLandcover'));
@@ -1736,6 +1776,26 @@ async function rebuildGeometryNow() {
     }
   }
 }
+
+/* The snow line decides which cells become snow, which decides the CSG domains — so
+   unlike the water level with flatten off there is no cheap recolour path, it is always
+   a worker rebuild. It costs no network either way: the Overpass response is already
+   cached and the altitude is applied in buildLandcover, not in the fetch.
+   Deliberately NOT in generationInputs — every id there is wired to cancelActiveWork,
+   which would abort the very rebuild this schedules. Same trap as #waterLevel. */
+function onSnowLineChange(echo) {
+  const el = $('snowLine'), v = parseFloat(el.value);
+  if (isFinite(v)) state.snowLineM = v;
+  else if (echo) el.value = String(state.snowLineM);
+  renderColorModeUI();
+  if (!landMode() && state.model?.opts.colorMode !== 'landcover') return;
+  if ($('generate').disabled) { scheduleGeometryRebuild(echo ? 0 : 120); return; }
+  if (!state.models.length) return;
+  scheduleGeometryRebuild(echo ? 0 : 120);
+}
+$('snowLine').addEventListener('input', () => onSnowLineChange(false));
+$('snowLine').addEventListener('change', () => onSnowLineChange(true));
+$('snowLineEnabled').addEventListener('change', () => onSnowLineChange(true));
 
 /* Water level and the keep-4-bands toggle both re-derive the mask, which can
    flip the band count — reconcile before applying. */
@@ -2593,7 +2653,12 @@ async function buildBambuFiles(model) {
     const NB = model.NB;
     const bandNames = NB === 4 ? ['low', 'mid-low', 'mid-high', 'peak'] : ['low', 'mid', 'peak'];
     // water first: with it, this is 3 bands + water = one full AMS set
-    const landPindex = mapped ? Object.fromEntries(TopoLandcover.CATEGORIES.map(category =>
+    /* Only categories that actually carry geometry get a material, so a land-type print
+       with no glaciers and no snow line stays at four — one AMS unit. addMat is the sole
+       allocator and hands back filamentColors.length - 1, so the indices stay contiguous
+       for any subset and every later material simply shifts down. */
+    const landUsed = mapped ? usedLandCategories(model, exportMeshes) : [];
+    const landPindex = mapped ? Object.fromEntries(landUsed.map(category =>
       [category, addMat(category, model.materialColors[category].toUpperCase())])) : null;
     const waterPindex = !mapped && model.hasWater ? addMat('water_blue', waterColor().toUpperCase()) : -1;
     const bandPindex = mapped ? [] : activeBandIds().map((id, k) =>
@@ -2609,7 +2674,7 @@ async function buildBambuFiles(model) {
       const row = Math.floor(P.id / model.nx) + 1, col = P.id % model.nx + 1;
       const comp = [], parts = [];
       if (mapped) {
-        for (const category of TopoLandcover.CATEGORIES) {
+        for (const category of landUsed) {
           const name = `r${row}c${col}_${category}`, material = landPindex[category];
           const xml = meshObjectXML(nextId, exportMeshes[P.id].materials[category].pos, material, name);
           if (xml) { res.push(xml); comp.push(nextId); parts.push({ id: nextId, name, extruder: material + 1 }); nextId++; }
@@ -2673,7 +2738,12 @@ async function exportBambu() {
   exportController = new AbortController();
   $('generate').disabled = true; setExportEnabled(false);
   const btn = $('exportBambu'); btn.disabled = true;
-  overlay(true, t('pgBambu', { n: state.model.NB + (state.model.hasWater ? 1 : 0) })); setStatus('');
+  // NB counts elevation bands, which land mode does not use at all; there the real
+  // count is the categories that survived to a mesh.
+  const colors = state.model.opts.colorMode === 'landcover'
+    ? usedLandCategories(state.model, state.model.materialMeshes).length
+    : state.model.NB + (state.model.hasWater ? 1 : 0);
+  overlay(true, t('pgBambu', { n: colors })); setStatus('');
   try {
     await new Promise(r => setTimeout(r, 30));
     if (isSeparateRegionOutput()) {
@@ -2756,8 +2826,12 @@ function detailNotes(model) {
   if (info.invalid) notes.push(t('noteBuildingInvalid', { n: info.invalid }));
   if (model.src.waterFailed) notes.push(t('noteWaterFailed'));
   if (model.opts.colorMode === 'landcover') {
-    notes.push(t('landcoverCoverage', { n: model.landcoverInfo.vegetationPercent.toFixed(1), skipped: model.landcoverInfo.invalid || 0 }));
-    if (model.landcoverInfo.status === 'empty') notes.push(t('landcoverEmpty'));
+    const land = model.landcoverInfo;
+    notes.push(t('landcoverCoverage', { n: land.vegetationPercent.toFixed(1), skipped: land.invalid || 0 }));
+    if (land.snowPercent > 0) notes.push(t('landcoverSnow', { n: land.snowPercent.toFixed(1) }));
+    // Says so in the exported README too: a chosen altitude is not measured snow.
+    if (Number.isFinite(land.snowLineM)) notes.push(t('readmeSnowLine', { alt: Math.round(land.snowLineM) }));
+    if (land.status === 'empty') notes.push(t('landcoverEmpty'));
   }
   return notes;
 }
@@ -2816,6 +2890,7 @@ async function generate() {
       detail: clamp(parseInt($('res').value, 10) || 400, 60, 1000),
       terrainProvider: $('terrainSource').value,
       colorMode: $('colorMode').value,
+      ...snowOpts(),
       includeBuildings: $('includeBuildings').checked,
       buildingScale: parseFloat($('buildingScale').value),
       nx: clamp(parseInt($('nx').value, 10) || 1, 1, 8),

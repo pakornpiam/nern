@@ -81,22 +81,48 @@ an even split and the app says so.
 
 **Elevation bands** is the default and is unchanged: height decides colour. **Real
 land types** throws that away and colours by what is actually on the ground, from
-OpenStreetMap. The AMS holds four materials either way, but now they are water,
-forest, grass/farmland, and other ground rather than a water slice plus altitude
-bands.
+OpenStreetMap: water, snow, forest, grass/farmland, and other ground, instead of a
+water slice plus altitude bands. Four of those print in an ordinary scene, so it
+still fits one AMS unit — snow only claims a fifth slot where there is snow, and
+the panel says so when it does.
 
-`natural=wood` and `landuse=forest` become forest. `natural=grassland|scrub|heath`
-and `landuse=grass|meadow|farmland|orchard|vineyard|allotments` become grass/farmland.
+`natural=glacier` and `natural=snowfield` become snow. `natural=wood` and
+`landuse=forest` become forest. `natural=grassland|scrub|heath` and
+`landuse=grass|meadow|farmland|orchard|vineyard|allotments` become grass/farmland.
 Everything else — streets, bare rock, roofs, and every square metre nobody has
-tagged — is other ground. Water is not looked up separately: it reuses the mask the
-water layer already builds, so turning the water layer off drops the blue and hands
-those cells to whatever land type covers them, and the water level still moves the
-shoreline. Where water and vegetation overlap, water wins.
+tagged — is other ground. `landuse=winter_sports` is deliberately *not* snow: a ski
+resort boundary is a business, not a surface, and routinely contains forest.
+
+Where polygons overlap, the order decides: **water beats snow beats forest beats
+grass**. So a glacier drawn across a wood prints as ice. Water is not looked up
+separately — it reuses the mask the water layer already builds, so turning the water
+layer off drops the blue and hands those cells to whatever land type covers them,
+and the water level still moves the shoreline.
+
+### The snow line
+
+OpenStreetMap holds **permanent** ice only: glaciers and permanent snowfields. There
+is no seasonal-snow tag anywhere in the data, so a peak that is white five months a
+year is not white here. **Add a snow line** fills that gap — everything at or above
+an altitude you type prints as snow, over the top of any glaciers that were mapped.
+
+Be clear about what that is: an altitude you chose, not measured snow. It is written
+into the exported README as such. The altitude is metres above sea level, the same
+units as the water level, and the model panel reports the range the selection spans
+so you have something to aim at. Cells are judged at their centre — the same point
+the OSM polygons are tested against — and the line overwrites mapped vegetation
+rather than yielding to it, because a snow cap a treeline could veto comes out
+moth-eaten wherever the treeline was drawn inconsistently.
+
+Changing it restamps from cached data, with no Overpass round-trip: the altitude is
+applied to the geometry, not to the request.
 
 This is mapped data, not imagery. A hillside with no forest polygon prints as other
 ground because nobody drew it, not because it is bare, and the coverage note under
 the colour pickers reports the mapped share so you can judge that before printing.
-Rural areas outside Europe are frequently blank.
+Rural areas outside Europe are frequently blank. Glacier coverage is good in the
+Alps, Himalaya, Andes, Alaska and Iceland and thin elsewhere; `natural=snowfield` is
+a real tag but a rare one, and adds little in practice.
 
 The colours are a 0.8 mm skin on top of an other-ground body, cut from the finished
 piece so buildings, routes, and jigsaw seams stay exactly where they were. Two
@@ -110,6 +136,10 @@ Boundaries snap to terrain cells, so **Terrain detail** sets the smallest patch 
 can appear — at detail 400 on a 180 mm print a cell is 0.45 mm, and a copse narrower
 than that either disappears or claims a whole cell. Raise detail before blaming the
 data.
+
+Glaciers are large, vertex-dense multipolygons, so an alpine selection now pulls far
+more geometry than the same box did before snow existed; a selection that used to
+succeed can hit the vertex ceiling below.
 
 Requests are capped at 1,000 km² per model, 10,000 features, and 200,000 vertices.
 Past any of those the mode is not available for that selection at all, so the app names
