@@ -132,6 +132,25 @@ there is thinner than 0.8 mm, or absent. And buildings print in the other-ground
 colour: the skin is cut away from their footprints so the walls stay one solid
 material rather than gaining a coloured cap.
 
+### Spreading
+
+**Spread mapped areas** grows every mapped land type outward by a number of grid cells,
+closing the gaps between fragments the grid is too coarse to hold. It is the natural
+companion to a large selection: land types are decided at cell centres, so a wood that
+covers most of a 300 m cell but misses its centre disappears entirely, and a scattering
+of survivors reads as noise. A spread of one or two usually turns that back into
+recognisable country.
+
+It is measured in cells rather than metres because the growth is per cell either way —
+a metre value would round to nothing at exactly the coarse detail this exists for. The
+details panel reports the cell size, so read the two together.
+
+Two things it deliberately will not do. It never spreads water, because the water mask is
+measured rather than guessed and growing it would move a real shoreline; growth only ever
+writes into unmapped ground. And it does not invent anything: where OpenStreetMap has
+mapped nothing at all, spreading changes nothing. The coverage note keeps reporting what
+was actually mapped and adds what the spread painted beside it, so the two never blur.
+
 Boundaries snap to terrain cells, so **Terrain detail** sets the smallest patch that
 can appear — at detail 400 on a 180 mm print a cell is 0.45 mm, and a copse narrower
 than that either disappears or claims a whole cell. Raise detail before blaming the

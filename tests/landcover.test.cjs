@@ -96,6 +96,7 @@ test('colored surfaces reconstruct terrain and buildings without overlap across 
   const scenarios = [
     {}, { flattenWater: true }, { nx: 2, ny: 2 }, { frameStyle: 'circle' }, { frameStyle: 'hex' },
     { waterEnabled: false }, { baseMM: 1 }, { snowLineM: 13 }, { snowLineM: 13, nx: 2, ny: 2 },
+    { landGrowCells: 2 }, { landGrowCells: 3, snowLineM: 13, nx: 2, ny: 2 },
     ...['inlay', 'emboss', 'engrave', 'through'].flatMap(routeMode => ['rounded', 'flat'].map(routeProfile => ({
       routeMode, routeProfile, nx: 2, routePath: [[0, 0.001], [0.002, 0.001]],
     }))),
@@ -249,4 +250,50 @@ test('features too small for any cell this selection could resolve are dropped',
   assert.deepEqual(kept.features.map(f => f.id), ['way/2', 'way/3']);   // the strip survives
   // Without a threshold nothing is filtered, which is what every small selection does.
   assert.equal(L.normalize([tiny, strip, big]).features.length, 3);
+});
+
+test('spreading grows mapped types one cell a round, and never moves water', async () => {
+  const { growCategories } = await import('../geometry-landcover.mjs');
+  const { CODE, OTHER } = L;
+  const W = 7, D = 1;
+  const grid = (...v) => Uint8Array.from(v);
+  const all = new Uint8Array(W * D).fill(1);
+
+  // One forest cell reaches exactly one cell a round, both ways.
+  const one = grid(OTHER, OTHER, OTHER, CODE.forest, OTHER, OTHER, OTHER);
+  assert.deepEqual([...growCategories(one.slice(), W, D, 0, all, CODE, OTHER)], [...one]);
+  assert.deepEqual([...growCategories(one.slice(), W, D, 1, all, CODE, OTHER)],
+    [OTHER, OTHER, CODE.forest, CODE.forest, CODE.forest, OTHER, OTHER]);
+  assert.deepEqual([...growCategories(one.slice(), W, D, 2, all, CODE, OTHER)],
+    [OTHER, CODE.forest, CODE.forest, CODE.forest, CODE.forest, CODE.forest, OTHER]);
+
+  // Water is a measured mask: it is neither spread nor overwritten.
+  const wet = grid(CODE.water, OTHER, OTHER, CODE.forest, OTHER, OTHER, CODE.water);
+  assert.deepEqual([...growCategories(wet.slice(), W, D, 1, all, CODE, OTHER)],
+    [CODE.water, OTHER, CODE.forest, CODE.forest, CODE.forest, OTHER, CODE.water]);
+  // Even a long spread leaves the water cells exactly where they were.
+  const flooded = growCategories(wet.slice(), W, D, 5, all, CODE, OTHER);
+  assert.equal(flooded[0], CODE.water); assert.equal(flooded[6], CODE.water);
+  assert.equal(flooded[1], CODE.forest);
+
+  // A cell between two types takes the lower code, as overlapping polygons do.
+  const both = grid(CODE.grass, OTHER, CODE.forest, OTHER, OTHER, OTHER, OTHER);
+  assert.equal(growCategories(both.slice(), W, D, 1, all, CODE, OTHER)[1], CODE.forest);
+  assert.ok(CODE.forest < CODE.grass);
+
+  // Growth stops at the printed footprint.
+  const shape = Uint8Array.from([1, 1, 1, 1, 0, 0, 0]);
+  assert.deepEqual([...growCategories(one.slice(), W, D, 3, shape, CODE, OTHER)],
+    [CODE.forest, CODE.forest, CODE.forest, CODE.forest, OTHER, OTHER, OTHER]);
+});
+
+test('spreading raises what is painted without touching what was mapped', async () => {
+  const plain = await build();
+  const spread = await build({ landGrowCells: 2 });
+  // The OSM figure is measured before the spread, so the note keeps meaning what it says.
+  assert.equal(spread.landcoverInfo.vegetationPercent, plain.landcoverInfo.vegetationPercent);
+  assert.equal(spread.landcoverInfo.growCells, 2);
+  assert.equal(plain.landcoverInfo.growCells, 0);
+  assert.equal(plain.landcoverInfo.coloredPercent, null);
+  assert.ok(spread.landcoverInfo.coloredPercent >= spread.landcoverInfo.vegetationPercent);
 });

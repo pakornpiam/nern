@@ -867,3 +867,50 @@ test('a tile that fails leaves a gap the details panel names, not a dead build',
   expect(calls).toBeGreaterThan(before);
   expect(errors).toEqual([]);
 });
+
+test('the spread slider fills the gaps from cached data, without moving the water', async ({ page }) => {
+  const errors = await setup(page);
+  const overpass = await routeLandcover(page);
+  await installFixture(page, { water: true });
+  // Land types only: elevation bands already cover every cell, so there is nothing to grow into.
+  await expect(page.locator('#landGrow')).toBeHidden();
+  await page.selectOption('#colorMode', 'landcover');
+  await expect(page.locator('#landGrow')).toBeVisible();
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  const before = await page.evaluate(() => ({
+    veg: state.model.landcoverInfo.vegetationPercent,
+    water: state.model.materialMeshes[0].materials.water.pos.length,
+    grow: state.model.landcoverInfo.growCells,
+  }));
+  expect(before.grow).toBe(0);
+  expect(overpass.calls).toBe(1);
+
+  await page.locator('#landGrow').fill('2');
+  await page.locator('#landGrow').dispatchEvent('input');
+  await expect.poll(() => page.evaluate(() => state.model.landcoverInfo.growCells)).toBe(2);
+  await expect(page.locator('#landGrowVal')).toHaveText('2');
+  expect(await page.evaluate(() => state.model.opts.landGrowCells)).toBe(2);
+  // Restamped from the cached response: spreading is geometry, not a new lookup.
+  expect(overpass.calls).toBe(1);
+
+  const after = await page.evaluate(() => ({
+    veg: state.model.landcoverInfo.vegetationPercent,
+    colored: state.model.landcoverInfo.coloredPercent,
+    water: state.model.materialMeshes[0].materials.water.pos.length,
+  }));
+  // The OSM figure still reports what OSM mapped; only the painted share moves.
+  expect(after.veg).toBeCloseTo(before.veg, 6);
+  expect(after.colored).toBeGreaterThanOrEqual(after.veg);
+  // Growth writes into unmapped ground only, so the shoreline is untouched.
+  expect(after.water).toBe(before.water);
+  await expect(page.locator('#detailNotes')).toContainText('Spread by 2 cells');
+
+  await page.locator('#landGrow').fill('0');
+  await page.locator('#landGrow').dispatchEvent('input');
+  await expect.poll(() => page.evaluate(() => state.model.landcoverInfo.growCells)).toBe(0);
+  expect(await page.evaluate(() => state.model.landcoverInfo.coloredPercent)).toBe(null);
+  await expect(page.locator('#detailNotes')).not.toContainText('Spread by');
+  expect(overpass.calls).toBe(1);
+  expect(errors).toEqual([]);
+});
