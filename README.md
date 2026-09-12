@@ -131,12 +131,25 @@ Alps, Himalaya, Andes, Alaska and Iceland and thin elsewhere; `natural=snowfield
 a real tag but a rare one, and adds little in practice.
 
 The colours are a 0.8 mm skin on top of an other-ground body, cut from the finished
-piece so buildings, routes, and jigsaw seams stay exactly where they were. Two
-consequences are worth knowing. The skin never eats into the last 1 mm above the
-build plate, so on a model whose lowest ground sits under 1.8 mm the colour layer
-there is thinner than 0.8 mm, or absent. And buildings print in the other-ground
-colour: the skin is cut away from their footprints so the walls stay one solid
-material rather than gaining a coloured cap.
+piece so buildings, routes, and jigsaw seams stay exactly where they were. That
+0.8 mm is measured **perpendicular to the ground**, not straight down, and on steep
+terrain the difference is the whole print. A skin 0.8 mm thick *vertically* leaves a
+coloured ribbon only 0.8 mm ÷ slope wide at each slicing layer, and a model's slope is
+the real slope times the vertical exaggeration — so at the default 2.5× a 39° hillside
+came out as a single 0.4 mm extrusion and anything steeper fell below one extrusion
+width and was dropped by the slicer outright. Snow paid for that, since a snow line
+puts snow on the highest and steepest ground in the model by definition: it looked
+right in the preview and printed in the ground colour. Measuring the thickness along
+the surface normal keeps the ribbon at 0.8 mm or wider on any slope at any
+exaggeration, and leaves level ground with exactly the geometry it always had.
+
+Three further consequences are worth knowing. The skin never eats into the last 1 mm
+above the build plate, so on a model whose lowest ground sits under 1.8 mm the colour
+layer there is thinner than 0.8 mm, or absent. Buildings print in the other-ground
+colour: the skin is cut away from their footprints so the walls stay one solid material
+rather than gaining a coloured cap. And a colour region narrower than one cell is still
+narrower than one extrusion however thick the skin is — that is the grid's resolution
+rather than the skin's, and **Spread** is the control for it.
 
 ### Spreading
 

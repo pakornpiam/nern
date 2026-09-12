@@ -417,3 +417,65 @@ test('a thin base and a route bed keep their land colour', async () => {
     `skin floor ${routed.landcoverInfo.skinFloorZ} must sit below the route bed ${routed.grid.routeFloorZ}`);
   assert.ok(volumeOf(routed.materialMeshes[0].materials.forest) > 0);
 });
+
+test('the skin drop follows the steeper neighbour of each vertex', async () => {
+  const { skinDropField, SKIN_MM } = await import('../geometry-landcover.mjs');
+  const grid = (...h) => ({ Hv: Float32Array.from(h), W: 2, D: 1, VW: 3, dx: 1, dy: 1, zScale: 1 });
+  // Flat ground is the case that must not change: the factor is exactly 1.
+  const flat = skinDropField(grid(0, 0, 0, 0, 0, 0));
+  assert.equal(flat.length, 6);
+  for (const d of flat) assert.ok(Math.abs(d - SKIN_MM) < 1e-6, `${d}`);
+  // A uniform 1:1 ramp needs sqrt(2) of vertical drop to leave SKIN_MM perpendicular.
+  for (const d of skinDropField(grid(0, 1, 2, 0, 1, 2))) assert.ok(Math.abs(d - SKIN_MM * Math.SQRT2) < 1e-6, `${d}`);
+  /* A vertex shared by a flat cell and a steep one takes the STEEP one -- that is the cell
+     whose ribbon is at risk, and a central difference would average the spike away. */
+  const step = skinDropField(grid(0, 0, 3, 0, 0, 3)), steep = SKIN_MM * Math.hypot(1, 3);
+  assert.ok(Math.abs(step[0] - SKIN_MM) < 1e-6, `${step[0]}`);
+  for (const k of [1, 2]) assert.ok(Math.abs(step[k] - steep) < 1e-6, `${k}: ${step[k]}`);
+  // The ceiling is a stop against absurd coordinates, not part of the shape.
+  for (const d of skinDropField(grid(0, 0, 3, 0, 0, 3), SKIN_MM, 1)) assert.ok(d <= 1);
+});
+
+test('the coloured skin stays wide enough to slice on steep ground', async () => {
+  /* The skin used to be cut by dropping the terrain straight DOWN by 0.8 mm, which makes it
+     0.8 mm thick vertically -- so at a slicing layer the coloured ribbon was only
+     0.8 / slope wide, and a model's slope is the real slope times the vertical
+     exaggeration. Snow paid for it: a snow line puts snow on the highest and steepest
+     ground in the model by construction, so Bambu Studio dropped the ribbon as a
+     sub-extrusion-width feature and the summit printed in the ground colour, while the
+     app's own preview showed the snow perfectly. So measure what the slicer measures --
+     the horizontal width of the ribbon at a layer -- rather than the mesh's thickness. */
+  const { kernel, fromSoup } = await import('../geometry-city.mjs'), api = await kernel();
+  const { SKIN_MM } = await import('../geometry-landcover.mjs');
+  // One land type over the whole box, no water and no buildings: the skin is then the
+  // entire coloured surface and a slice of it is one clean band across the ramp.
+  const everywhere = [feature(1, rectangle(0, 0, 0.002, 0.002), { natural: 'wood' })];
+  const skinOf = async slope => {
+    const model = await build({ includeBuildings: false, waterEnabled: false }, { water: false, slope }, everywhere);
+    return { model, skin: fromSoup(api, model.materialMeshes[0].materials.forest.pos) };
+  };
+
+  const { model, skin } = await skinOf(200);
+  try {
+    // The fixture ramps along x alone, so this is the model's slope exactly.
+    const slope = (model.maxZ - model.grid.baseMM) / model.modelWidth;
+    assert.ok(slope > 2, `slope ${slope}`);
+    // What the old flat drop would have left: well under one 0.4 mm extrusion, i.e. nothing.
+    assert.ok(SKIN_MM / slope < 0.4, `a flat drop would leave ${SKIN_MM / slope} mm`);
+    const box = skin.boundingBox();
+    for (let f = 0.2; f <= 0.81; f += 0.1) {
+      const cross = skin.slice(box.min[2] + (box.max[2] - box.min[2]) * f);
+      try {
+        const width = cross.bounds().max[0] - cross.bounds().min[0];
+        assert.ok(width >= SKIN_MM - 1e-3, `layer ${f.toFixed(1)} of the ramp is ${width} mm wide`);
+      } finally { cross.delete(); }
+    }
+  } finally { skin.delete(); }
+
+  // Level ground keeps precisely the slab it always had: volume over footprint is SKIN_MM.
+  const flat = await skinOf(0);
+  try {
+    const thickness = flat.skin.volume() / (flat.model.modelWidth * flat.model.modelDepth);
+    assert.ok(Math.abs(thickness - SKIN_MM) < 1e-3, `flat ground skin is ${thickness} mm thick`);
+  } finally { flat.skin.delete(); }
+});
