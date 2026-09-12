@@ -57,6 +57,71 @@ export function growCategories(cells, W, D, rounds, shape, CODE, OTHER) {
 
 const emptyMesh = () => ({ pos: new Float32Array(), nrm: new Float32Array() });
 
+/* How thick the coloured skin is, measured PERPENDICULAR to the ground rather than
+   vertically. The difference is the whole point, and it decides whether the colour
+   survives the slicer.
+
+   The skin is cut by subtracting a lowered copy of the terrain. Lower it straight down by
+   0.8 mm and the skin is 0.8 mm thick VERTICALLY, so at any slicing layer the coloured
+   ribbon is only 0.8 / slope wide -- and the model's slope is the real slope times the
+   vertical exaggeration, because X/Y and Z both scale by mmPerMeter and only Z is then
+   multiplied by vex. At the default vex of 2.5 a 22 degree hillside leaves 0.8 mm, a 39
+   degree one leaves 0.4 mm -- a single extrusion -- and anything steeper is below one
+   extrusion width, which Bambu Studio drops outright. Snow is the category that paid for
+   it: a snow line puts snow on the highest and steepest ground in the model by
+   construction, so it sliced away to nothing while the app's own preview showed it
+   perfectly, and forest and grass on gentler ground survived.
+
+   Dropping by SKIN_MM * sqrt(1 + |grad z|^2) instead gives a skin SKIN_MM thick
+   perpendicular to the surface. The ribbon at a layer is then SKIN_MM * sqrt(1 + 1/s^2),
+   which is at least SKIN_MM on ANY slope at ANY exaggeration, and on flat ground the
+   factor is exactly 1 -- so level terrain keeps precisely the geometry it had before. */
+export const SKIN_MM = 0.8;
+
+/* Vertical drop per grid vertex, in model mm. Per axis it takes the STEEPER of the two
+   adjacent cells rather than a central difference: the vertex is shared by the triangles on
+   both sides, and it is the steeper of them whose ribbon is at risk -- a central difference
+   averages exactly the spike that has to print away. `ceiling` is a sanity stop for a cliff
+   that drops a whole tile in one cell; the skin is trimmed at skinFloorZ regardless, so a
+   drop deeper than the model is tall can only cost boolean work. */
+export function skinDropField(g, skin = SKIN_MM, ceiling = Infinity) {
+  const { Hv, W, D, VW, dx, dy, zScale } = g, VD = D + 1;
+  const drop = new Float32Array(VW * VD);
+  for (let j = 0; j < VD; j++) for (let i = 0; i < VW; i++) {
+    const k = j * VW + i, h = Hv[k];
+    const gx = Math.max(i > 0 ? Math.abs(h - Hv[k - 1]) : 0, i < W ? Math.abs(Hv[k + 1] - h) : 0) * zScale / dx;
+    const gy = Math.max(j > 0 ? Math.abs(h - Hv[k - VW]) : 0, j < D ? Math.abs(Hv[k + VW] - h) : 0) * zScale / dy;
+    drop[k] = Math.min(ceiling, skin * Math.hypot(1, gx, gy));
+  }
+  return drop;
+}
+
+/* Bilinear, and a pure function of (x, y) -- which is what keeps the sheared mesh closed.
+   A wall's top and bottom vertex, and the two cells meeting at a seam, share an (x, y) and
+   so are guaranteed the identical drop. Same grid indexing as groundAt in geometry-city. */
+function dropAt(drop, g, x, y) {
+  const gx = Math.min(Math.max(x / g.dx, 0), g.W), gy = Math.min(Math.max((g.modelDepth - y) / g.dy, 0), g.D);
+  const i = Math.min(g.W - 1, Math.floor(gx)), j = Math.min(g.D - 1, Math.floor(gy));
+  const fx = gx - i, fy = gy - j, k = j * g.VW + i;
+  return drop[k] * (1 - fx) * (1 - fy) + drop[k + 1] * fx * (1 - fy) +
+    drop[k + g.VW] * (1 - fx) * fy + drop[k + g.VW + 1] * fx * fy;
+}
+
+/* The lowered terrain, as a vertical shear (x, y, z) -> (x, y, z - drop(x, y)) of the piece
+   rather than a translate. A shear is a bijection of space, so it cannot introduce a
+   self-intersection; the piece's base is tessellated cell by cell on the same grid as its
+   top, so the sheared copy stays closed; walls, whose two ends share an (x, y), stay
+   vertical; and the sheared base sits below the sheared top everywhere because the original
+   top is always above z = 0. */
+function loweredSoup(pos, drop, g) {
+  const out = new Float32Array(pos.length);
+  for (let k = 0; k < pos.length; k += 3) {
+    out[k] = pos[k]; out[k + 1] = pos[k + 1];
+    out[k + 2] = pos[k + 2] - dropAt(drop, g, pos[k], pos[k + 1]);
+  }
+  return out;
+}
+
 // A category edge that lands exactly on a piece seam leaves zero-thickness flaps in
 // the boolean result. They enclose nothing, so the kernel ignores them, but a
 // triangle soup cannot tell a flap from a real surface: reloading the mesh welds it
@@ -118,6 +183,10 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
      under the lowest surface that actually has to carry colour instead. */
   const lowestSurface = Math.min(g.baseMM, g.routeFloorZ > 0 ? g.routeFloorZ : Infinity);
   const skinFloorZ = Math.max(0.2, Math.min(1, lowestSurface - 0.2));
+  /* One field for the whole model: the shear only depends on the height grid, and every
+     piece reads the same grid. The trim above is what keeps a deep drop harmless, so the
+     ceiling here is only a stop against absurd coordinates. */
+  const skinDrop = skinDropField(g, SKIN_MM, model.maxZ + 1);
   const grow = model.opts?.landGrowCells;
   const rounds = Array.from({ length: OTHER + 1 }, (_, c) => (c <= CODE.water || c >= OTHER) ? 0
     : Math.max(0, Math.min(MAX_GROW, (typeof grow === 'number' ? grow : grow?.[CATEGORIES[c]]) | 0)));
@@ -167,9 +236,8 @@ export async function buildLandcover(model, terrainPieces, progress = () => {}) 
           // The city's mesh has already been rounded to float32; resolve tiny
           // coplanar differences well below the export's 0.008 mm resolution.
           const solidOf = pos => keep(keep(fromSoup(api, pos)).setTolerance(0.0001));
-          const terrain = solidOf(terrainPieces[piece.id]);
           const fused = solidOf(piece.pos);
-          const lowered = keep(terrain.translate([0, 0, -0.8]));
+          const lowered = solidOf(loweredSoup(terrainPieces[piece.id], skinDrop, g));
           // Use the fused top surface, whose vertices have already made the city's
           // float32 round trip, so the skin and remainder share exactly that top.
           let shell = keep(keep(fused.subtract(lowered)).trimByPlane([0, 0, 1], skinFloorZ));
