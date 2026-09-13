@@ -59,6 +59,28 @@ function resolveRouteDims(opts = {}, cellDiagonal = 0) {
 }
 const DEFAULT_CHANNEL_HALF = ROUTE_W / 2 + ROUTE_C; // fallback for models built before route dims
 
+/* Thickness of the standalone flat route part (mm). Not a route dimension: it sizes a
+   part that exists only in its own export, so it never reaches resolveRouteDims. */
+const FLAT_ROUTE_T = 2.0;
+
+/* Route lat/lon → model mm, the same mapping the vertex X/Y helpers use. buildGeometry
+   stamps from these and buildFlatRouteMesh re-derives the corridor at export time, so
+   they share the projection rather than each carrying their own copy of it — the two
+   must not drift about where the route runs. */
+function routeSegmentsMM(routePath, bounds, modelWidth, modelDepth) {
+  const [[latS, lonW], [latN, lonE]] = bounds;
+  return (routePath || []).map(([la, lo]) => [
+    (lo - lonW) / (lonE - lonW) * modelWidth,
+    (la - latS) / (latN - latS) * modelDepth
+  ]);
+}
+
+function distToSegMM(px, py, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay;
+  const t = clamp(((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy || 1), 0, 1);
+  return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+}
+
 function pointInRing(lon, lat, ring) {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -460,22 +482,14 @@ function buildGeometry(src, opts, onStep = () => {}) {
       ? d => clamp((routeDims.halfW - d) / routeDims.chamfer, 0, 1)
       : d => 1 - (d / routeDims.halfW) ** 2;
     // route lat/lon → model mm (same mapping as vertex X/Y below)
-    const seg = opts.routePath.map(([la, lo]) => [
-      (lo - lonW) / (lonE - lonW) * modelWidth,
-      (la - latS) / (latN - latS) * modelDepth
-    ]);
-    const distToSeg = (px, py, ax, ay, bx, by) => {
-      const vx = bx - ax, vy = by - ay;
-      const t = clamp(((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy || 1), 0, 1);
-      return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
-    };
+    const seg = routeSegmentsMM(opts.routePath, bounds, modelWidth, modelDepth);
     for (let j = 0; j < VD; j++) {
       const yv = modelDepth - j * dy;
       for (let i = 0; i < VW; i++) {
         const xv = i * dx;
         let d = Infinity;
         for (let s = 0; s + 1 < seg.length && d > 0; s++) {
-          d = Math.min(d, distToSeg(xv, yv, seg[s][0], seg[s][1], seg[s + 1][0], seg[s + 1][1]));
+          d = Math.min(d, distToSegMM(xv, yv, seg[s][0], seg[s][1], seg[s + 1][0], seg[s + 1][1]));
         }
         if (throughRoute) {
           routeDist[j * VW + i] = d;
@@ -1170,5 +1184,95 @@ function buildWaterCapMesh(model, pieceId) {
   }
   return pos;
 }
-root.TopoGeometry = { resolveRouteDims, pointInRing, pointInRegion, haversine, rasterizeWaterRings, shapeInsideFn, buildPartition, meshTri, lerpClipVertex, clipScalarPolygon, clipScalarSegment, addVerticalWall, addClippedPrismTriangle, addClippedBoundaryWall, buildGeometry, labelBodies, bodyMedians, flattenWaterHeights, buildCapCellMask, landMinOf, applyWaterLevel, splitVerticalTJunctions, buildBandSolidMesh, buildWaterCapMesh };
+
+/* --- the standalone FLAT route part ---
+   The route corridor as a constant-thickness plate: top at z = T, bottom at z = 0, both
+   genuinely planar. Every other route part has at least one curved face — the inlay
+   ribbon rides the grooved terrain and the through plug's top follows the ground — so
+   none of them prints face-down on a real contact patch. This one does.
+
+   Built on demand at EXPORT time, never during buildGeometry: it is not in model.pieces,
+   not in model.routeParts, not in the preview and not in any existing archive, so adding
+   it leaves every other export byte-identical and costs nothing at build time.
+
+   That means re-deriving the distance field here rather than reading grid.routeDist —
+   which only exists for a through route, while this part is offered in every mode, `off`
+   included. routeSegmentsMM is shared with the stamp so the two agree on the corridor,
+   and grid.routeHalf (resolved unconditionally, cell-diagonal floor included) makes the
+   part exactly as wide as the route the terrain carries.
+
+   routePath overrides the one the model was built with. Nothing here reads the stamped
+   terrain, so a route drawn AFTER the model was generated needs no rebuild to be
+   exported — only the model's grid, width and print outline. The caller passes the live
+   route; omitting it falls back to the model's own. */
+function buildFlatRouteMesh(model, thicknessMM, routePath) {
+  const g = model && model.grid;
+  const path = routePath || (model && model.opts && model.opts.routePath);
+  const bounds = model && model.src && model.src.bounds;
+  if (!g || !bounds || !path || path.length < 2) return null;
+  const { cellShape, W, D, VW, dx, dy, modelDepth } = g;
+  const VD = D + 1;                                     // grid carries VW but not VD
+  const halfW = g.routeHalf ?? ROUTE_W / 2;
+  const T = clamp(Number.isFinite(+thicknessMM) ? +thicknessMM : FLAT_ROUTE_T, 0.4, 10);
+
+  const seg = routeSegmentsMM(path, bounds, model.modelWidth, modelDepth);
+  /* Only the vertices near the route can matter, so the field is filled inside the
+     path's bounding box grown by the corridor and one cell. Everything else keeps
+     Infinity — and that fill is load-bearing: a zero-filled Float32Array reads as
+     distance 0, which would put every untouched vertex INSIDE the corridor. */
+  const pad = halfW + Math.max(dx, dy);
+  let sx0 = Infinity, sx1 = -Infinity, sy0 = Infinity, sy1 = -Infinity;
+  for (const [x, y] of seg) {
+    if (x < sx0) sx0 = x; if (x > sx1) sx1 = x;
+    if (y < sy0) sy0 = y; if (y > sy1) sy1 = y;
+  }
+  if (!isFinite(sx0)) return null;
+  const i0 = Math.max(0, Math.floor((sx0 - pad) / dx));
+  const i1 = Math.min(W - 1, Math.ceil((sx1 + pad) / dx));
+  // Y(j) runs the other way, so the j window is the x one mirrored through modelDepth.
+  const j0 = Math.max(0, Math.floor((modelDepth - (sy1 + pad)) / dy));
+  const j1 = Math.min(D - 1, Math.ceil((modelDepth - (sy0 - pad)) / dy));
+  if (i0 > i1 || j0 > j1) return null;
+
+  const dist = new Float32Array(VW * VD).fill(Infinity);
+  for (let j = j0; j <= j1 + 1 && j < VD; j++) {
+    const yv = modelDepth - j * dy;
+    for (let i = i0; i <= i1 + 1 && i < VW; i++) {
+      const xv = i * dx;
+      let d = Infinity;
+      for (let s = 0; s + 1 < seg.length && d > 0; s++) {
+        d = Math.min(d, distToSegMM(xv, yv, seg[s][0], seg[s][1], seg[s + 1][0], seg[s + 1][1]));
+      }
+      dist[j * VW + i] = d;
+    }
+  }
+
+  const X = i => i * dx, Y = j => modelDepth - j * dy;
+  const mesh = { pos: [], nrm: [] };
+  /* Membership is the print outline alone — never the window. A cell outside the window
+     clips to nothing, and a boundary wall against one is dropped by clipScalarSegment,
+     so folding the window in here would only invent walls in the middle of the ribbon. */
+  const active = (i, j) => i >= 0 && j >= 0 && i < W && j < D && !!cellShape[j * W + i];
+  const bottom = () => 0;
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      if (!active(i, j)) continue;
+      const x0 = X(i), x1 = X(i + 1), y0 = Y(j), y1 = Y(j + 1);
+      const v00 = { x: x0, y: y0, z: T, d: dist[j * VW + i] };
+      const v10 = { x: x1, y: y0, z: T, d: dist[j * VW + i + 1] };
+      const v11 = { x: x1, y: y1, z: T, d: dist[(j + 1) * VW + i + 1] };
+      const v01 = { x: x0, y: y1, z: T, d: dist[(j + 1) * VW + i] };
+      addClippedPrismTriangle(mesh, [v00, v11, v10], halfW, true, bottom);
+      addClippedPrismTriangle(mesh, [v00, v01, v11], halfW, true, bottom);
+      // Cell perimeter in CCW order, with the cell interior on the left. One continuous
+      // ribbon, so the jigsaw partition is ignored and only the print outline closes it.
+      if (!active(i - 1, j)) addClippedBoundaryWall(mesh, v00, v01, halfW, true, bottom);
+      if (!active(i, j + 1)) addClippedBoundaryWall(mesh, v01, v11, halfW, true, bottom);
+      if (!active(i + 1, j)) addClippedBoundaryWall(mesh, v11, v10, halfW, true, bottom);
+      if (!active(i, j - 1)) addClippedBoundaryWall(mesh, v10, v00, halfW, true, bottom);
+    }
+  }
+  return mesh.pos.length ? mesh : null;
+}
+root.TopoGeometry = { resolveRouteDims, pointInRing, pointInRegion, haversine, rasterizeWaterRings, shapeInsideFn, buildPartition, meshTri, lerpClipVertex, clipScalarPolygon, clipScalarSegment, addVerticalWall, addClippedPrismTriangle, addClippedBoundaryWall, buildGeometry, labelBodies, bodyMedians, flattenWaterHeights, buildCapCellMask, landMinOf, applyWaterLevel, splitVerticalTJunctions, buildBandSolidMesh, buildWaterCapMesh, routeSegmentsMM, distToSegMM, buildFlatRouteMesh };
 })(globalThis);

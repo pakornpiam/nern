@@ -1010,3 +1010,111 @@ test('separated puzzle pieces keep their tabs and surface coverage in both color
   }
   expect(errors).toEqual([]);
 });
+
+test('the flat route downloads on its own, in any mode, and is gated on the model', async ({ page }) => {
+  const errors = await setup(page);
+  await installFixture(page, { samples: 60 });
+  await page.evaluate(() => setArea(0.001, 0.001, 0.2, 0.2));
+
+  // No route on the model: the button stays off while the other exports come alive.
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+  await expect(page.locator('#exportRouteFlat')).toBeDisabled();
+
+  /* Drawing a route arms the button straight away — no Generate. The plate reads no
+     stamped terrain, so requiring a rebuild for it was a restriction with nothing behind
+     it, and a greyed-out button with no explanation is exactly how it was hit. */
+  await page.evaluate(() => { route.pts = [[0.0002, 0.001], [0.0018, 0.001]]; redrawRoute(); updateRouteButtons(); });
+  await expect(page.locator('#exportRouteFlat')).toBeEnabled();
+  const early = page.waitForEvent('download');
+  await page.evaluate(() => exportRouteFlat());
+  expect((await early).suggestedFilename()).toBe('topopuzzle_route_flat.stl');
+  // Clearing it disarms the button again rather than leaving a dead control.
+  await page.evaluate(() => { route.pts = []; redrawRoute(); updateRouteButtons(); });
+  await expect(page.locator('#exportRouteFlat')).toBeDisabled();
+  await page.evaluate(() => { route.pts = [[0.0002, 0.001], [0.0018, 0.001]]; redrawRoute(); updateRouteButtons(); });
+
+  // Off is the mode that proves the part is independent of the terrain stamp.
+  await page.selectOption('#routeMode', 'off');
+  await page.click('#generate');
+  await expect(page.locator('#exportRouteFlat')).toBeEnabled();
+
+  // The thickness slider owns no geometry: no regenerate, no rebuild, no new source.
+  await page.evaluate(() => { window.builtAt = state.model; });
+  await page.locator('#routeFlatThick').fill('3.5');
+  await page.locator('#routeFlatThick').dispatchEvent('input');
+  await expect(page.locator('#routeFlatThickVal')).toHaveText('3.5');
+  await expect(page.locator('#routeFlatHint')).toContainText('3.5 mm thick');
+  expect(await page.evaluate(() => state.model === window.builtAt)).toBe(true);
+
+  // Exercise the download handler directly without submitting a test lead.
+  const stl = page.waitForEvent('download');
+  await page.evaluate(() => exportRouteFlat());
+  expect((await stl).suggestedFilename()).toBe('topopuzzle_route_flat.stl');
+
+  // The slider really reached the part: both faces sit on the planes it names.
+  const z = await page.evaluate(() => {
+    const mesh = TopoGeometry.buildFlatRouteMesh(state.model, parseFloat($('routeFlatThick').value));
+    return [...new Set(Array.from(mesh.pos).filter((_, k) => k % 3 === 2))].sort((a, b) => a - b);
+  });
+  expect(z).toEqual([0, 3.5]);
+
+  // Separate regions get one plate each, in an archive named after them — and a region
+  // the route misses is skipped rather than shipped as an empty solid.
+  await page.evaluate(() => {
+    state.selectedRegions = [1, 2].map(id => ({ id: String(id), name: `District ${id}`, color: '#4dd0a7',
+      bounds: fixtureSrc.bounds,
+      polygons: [{ bbox: [0, 0, 0.002, 0.002], rings: [[[0, 0], [0.002, 0], [0.002, 0.002], [0, 0.002]]] }] }));
+    state.regionOutputMode = 'separate';
+    refreshExportLabels();          // the real region handlers do this; state set by hand does not
+  });
+  await page.click('#generate');
+  await expect(page.locator('#exportRouteFlat')).toBeEnabled();
+  await expect(page.locator('#exportRouteFlat')).toHaveText(/per region/);
+  const zipDl = page.waitForEvent('download');
+  await page.evaluate(() => exportRouteFlat());
+  const got = await zipDl;
+  expect(got.suggestedFilename()).toBe('district_1_district_2_route_flat.zip');
+  const names = await page.evaluate(async () => {
+    const zip = new JSZip();
+    for (const m of state.models)
+      zip.folder(m.exportName).file(m.exportName + '_route_flat.stl',
+        pieceToBinarySTL(TopoGeometry.buildFlatRouteMesh(m, 3.5)));
+    return Object.keys((await JSZip.loadAsync(await zip.generateAsync({ type: 'blob' }))).files).sort();
+  });
+  expect(names).toContain('district_1/district_1_route_flat.stl');
+  expect(names).toContain('district_2/district_2_route_flat.stl');
+  expect(errors).toEqual([]);
+});
+
+test('a flat route export that cannot run says so instead of failing silently', async ({ page }) => {
+  /* The click handler does not await the export, so anything thrown inside it used to be
+     an unhandled rejection: no file, no status, nothing to tell a failure from a no-op.
+     A stale cached geometry-core.js is exactly that case — the builder is not there. */
+  await setup(page); await installFixture(page, { samples: 40 });
+  await page.evaluate(() => {
+    setArea(0.001, 0.001, 0.2, 0.2);
+    route.pts = [[0.0002, 0.001], [0.0018, 0.001]]; redrawRoute(); updateRouteButtons();
+  });
+  const status = () => page.locator('#status');
+
+  await page.evaluate(() => exportRouteFlat());
+  await expect(status()).toContainText('Generate the terrain first');
+
+  await page.click('#generate');
+  await expect(page.locator('#exportOne')).toBeEnabled();
+
+  await page.evaluate(() => { window.__real = TopoGeometry.buildFlatRouteMesh; delete TopoGeometry.buildFlatRouteMesh; });
+  await page.evaluate(() => exportRouteFlat());
+  await expect(status()).toContainText('old cached copy');
+
+  await page.evaluate(() => { TopoGeometry.buildFlatRouteMesh = () => { throw new Error('boom'); }; });
+  await page.evaluate(() => exportRouteFlat());
+  await expect(status()).toContainText('could not be built (boom)');
+
+  // Restored, the same click really does produce the file.
+  await page.evaluate(() => { TopoGeometry.buildFlatRouteMesh = window.__real; });
+  const dl = page.waitForEvent('download');
+  await page.evaluate(() => exportRouteFlat());
+  expect((await dl).suggestedFilename()).toBe('topopuzzle_route_flat.stl');
+});

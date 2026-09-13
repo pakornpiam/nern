@@ -280,11 +280,41 @@ tile or Overpass request, so dragging a slider is cheap. Building footprints and
 banded 3MF and water solids all follow the width, so a widened route stays open and
 its exports stay watertight.
 
+## The flat route part
+
+Every route part above has a curved face somewhere. The inlay ribbon rides the grooved
+terrain on one side and the original terrain on the other; the through plug gets a flat
+bottom only from the flat profile, and its top follows the ground either way. **Export
+flat route** is the part that has neither: the route corridor as a plain plate, top and
+bottom both planar, so it prints face-down on a real contact patch with supports off. It
+is the shape you want as a keepsake, a glue-on marker, or a two-colour overlay rather
+than something that seats in the print.
+
+**Flat route thickness** sizes it, 0.4–10 mm, and that slider does nothing else. The
+plate is built from the model when you press the button, so it is in no preview, no
+piece, no `_pieces.zip` and no Bambu 3MF, and dragging the thickness neither regenerates
+nor rebuilds anything. Its width is the route width — the *stamped* one, so a route
+widened to what the grid can carry gives a plate widened to match, and the part is
+always as wide as the route on the print. It is clipped to the printed outline the same
+way, so a circle or hex frame cuts the plate short exactly where it cuts the terrain.
+
+It is offered in every mode, **Off included**, because it depends on nothing the terrain
+stamp did — only on the path, the width and the print outline. That makes Off the useful
+case rather than a degenerate one: a clean unmarked terrain, with the route as a separate
+flat piece beside it.
+
+For the same reason it is the one export that follows the route on the *map* rather than
+the one baked into the model: draw or import a track after generating and the button arms
+immediately, with no rebuild, because nothing about the plate depends on what was stamped.
+Clear the route and it falls back to the one the model was built with, so the part you
+just had does not vanish. It still needs a model — the grid, the route width and the
+printed outline all come from there — so Generate at least once first.
+
 ## Export names
 
 Downloads take the name of the place you searched, so `Chiang Mai` yields
 `chiang_mai_chiang_mai_province_combined.stl` alongside its pieces, Bambu, frame,
-and route counterparts. Selected regions name themselves, and an archive holding
+and route counterparts — `_route_flat.stl` among them. Selected regions name themselves, and an archive holding
 several regions joins theirs. Typing new coordinates clears the name and falls
 back to `topopuzzle`; dragging or resizing the box keeps it, since that refines
 the same place. A model keeps the name it was generated for until it is rebuilt.
