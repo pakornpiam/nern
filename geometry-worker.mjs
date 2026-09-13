@@ -16,5 +16,13 @@ self.onmessage = async ({ data }) => {
     } else if (action === 'export') result = await exportSolids(model, progress);
     else throw new Error('errCityGeometry');
     self.postMessage({ result });
-  } catch (e) { self.postMessage({ error: ['errCityGeometry', 'errLandcoverFetch'].includes(e.message) ? e.message : 'errGeometryWorker' }); }
+  } catch (e) {
+    /* Every failure that is not one of the two diagnosable ones reaches the user as the
+       same generic errGeometryWorker, which says nothing about what actually broke. Log
+       the real error and stack here first: a worker's console reaches DevTools like any
+       other, so a bug report can name the cause instead of the catch-all. */
+    const known = ['errCityGeometry', 'errLandcoverFetch'].includes(e.message);
+    if (!known) console.error('[topopuzzle worker]', action, e && e.stack || e);
+    self.postMessage({ error: known ? e.message : 'errGeometryWorker' });
+  }
 };

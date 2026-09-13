@@ -124,6 +124,12 @@
         <input id="routeClearance" type="range" min="0" max="0.8" value="0.2" step="0.05" />
         <div class="hint" id="routeHint">The 3.2 mm route reaches the print bottom. Its channel is 3.6 mm wide, leaving 0.2 mm clearance on each side for assembly.</div>
       </div>
+      <!-- Sizes the standalone flat route part only, so it sits OUTSIDE #throughRouteOpts:
+           that part is offered in every mode, Off included. Like #routeHint above it
+           carries no data-i18n — renderRouteUI writes the live numbers into it. -->
+      <label class="row" style="margin:8px 0 4px" for="routeFlatThick"><span data-i18n="lblRouteFlatThick">Flat route thickness</span> <span class="val"><span id="routeFlatThickVal">2.0</span> mm</span></label>
+      <input id="routeFlatThick" type="range" min="0.4" max="10" value="2" step="0.1" />
+      <div class="hint" id="routeFlatHint"></div>
       <!-- #areaVal is a SIBLING of the data-i18n span: applyI18n assigns textContent
            to every [data-i18n] element and would otherwise wipe the live value.
            The slider's value must match the larger default axis; renderAreaUI writes it. -->
@@ -339,6 +345,7 @@
     <button id="exportZip" class="ghost" disabled data-i18n="btnExportZip">⬇ Export puzzle pieces (.zip of STL)</button>
     <button id="exportOne" class="ghost" disabled data-i18n="btnExportOne">⬇ Export single combined STL</button>
     <button id="exportFrame" class="ghost" disabled data-i18n="btnExportFrame">⬇ Export frame plate (STL)</button>
+    <button id="exportRouteFlat" class="ghost" disabled data-i18n="btnExportRouteFlat">⬇ Export flat route (STL)</button>
 
     <div id="status"></div>
     <p class="hint" style="margin-top:16px" data-i18n="hintCredits">Elevation: AWS Terrarium terrain tiles. Basemap: OpenStreetMap. Geocoding: Nominatim. All free, no API key.</p>
@@ -774,9 +781,24 @@ function refreshRegionList() {
   $('regionMode').value = state.regionOutputMode;
 }
 
+let exportsReady = false;
 function setExportEnabled(on) {
   $('exportZip').disabled = !on; $('exportOne').disabled = !on; $('exportBambu').disabled = !on;
   $('exportFrame').disabled = !on || !state.model || !state.model.frame;
+  exportsReady = on;
+  refreshFlatRouteButton();
+}
+
+/* The flat plate reads no stamped terrain — only the model's grid, route width and print
+   outline — so it follows the route on the MAP and needs no regenerate to pick up one
+   drawn after the fact. That is the whole point of it being a separate part; gating it on
+   the model's own route just greyed the button out with nothing to explain why. A route
+   deleted from the map still falls back to the one the model was built with. */
+function flatRoutePath() {
+  return currentRoutePts() || state.models[0]?.opts?.routePath || null;
+}
+function refreshFlatRouteButton() {
+  $('exportRouteFlat').disabled = !exportsReady || (flatRoutePath()?.length || 0) < 2;
 }
 
 function refreshExportLabels() {
@@ -784,6 +806,7 @@ function refreshExportLabels() {
   $('exportBambu').textContent = t(multi ? 'btnExportBambuMulti' : 'btnExportBambu');
   $('exportZip').textContent = t(multi ? 'btnExportZipMulti' : 'btnExportZip');
   $('exportOne').textContent = t(multi ? 'btnExportOneMulti' : 'btnExportOne');
+  $('exportRouteFlat').textContent = t(multi ? 'btnExportRouteFlatMulti' : 'btnExportRouteFlat');
 }
 
 function isSeparateRegionOutput() {
@@ -1067,6 +1090,7 @@ function updateRouteButtons() {
   $('routeClear').style.display = (n || gpxLayer) ? '' : 'none';
   $('routeFit').style.display = hasRoute ? '' : 'none';
   $('routeSave').style.display = hasRoute ? '' : 'none';
+  refreshFlatRouteButton();   // the flat plate follows the map, so it changes with it
 }
 
 function redrawRoute() {
@@ -1216,6 +1240,13 @@ function renderRouteUI() {
     clear: d.routeClearMM.toFixed(2),
     depth: d.routeDepthMM.toFixed(1)
   });
+  /* The flat part is built at export time and never joins the preview, so this hint is
+     the only place its dimensions are shown. Width tracks the route slider even when
+     the mode is Off, which is exactly when the part is most likely wanted. */
+  $('routeFlatHint').textContent = t('hintRouteFlat', {
+    route: d.routeWidthMM.toFixed(1),
+    thick: (+$('routeFlatThick').value).toFixed(1)
+  });
 }
 $('routeMode').addEventListener('change', renderRouteUI);
 /* The profile only restamps geometry the cached source already covers, so it takes the
@@ -1284,6 +1315,10 @@ for (const [id, valId, digits] of [['routeWidth', 'routeWidthVal', 1], ['routeDe
   $(id).addEventListener('input', () => onRouteDimChange(false));
   $(id).addEventListener('change', () => onRouteDimChange(true));
 }
+/* Deliberately NOT one of those, and deliberately absent from generationInputs: the flat
+   part is built from the model at export time and is in neither the model nor the
+   preview, so this slider needs no regenerate and no rebuild. Dragging it is free. */
+bindSlider('routeFlatThick', 'routeFlatThickVal', v => (+v).toFixed(1), renderRouteUI);
 
 /* ============================================================================
    WATER MASK — OSM water polygons (Overpass API), rasterized onto the
@@ -2235,6 +2270,51 @@ async function exportOne() {
   download(await zip.generateAsync({ type: 'blob' }), file);
   setStatusKey('stDownloaded', { file }, 'ok');
 }
+/* The standalone flat route part: the corridor as a constant-thickness plate, both faces
+   planar. Built here rather than in the worker because it is a single cheap CPU pass over
+   the route's own window of the grid — and built on demand, so it never enters the model,
+   the preview, the pieces ZIP or the Bambu 3MF. */
+async function exportRouteFlat() {
+  /* Say something on EVERY path. The click handler does not await this, so anything that
+     throws here becomes an unhandled rejection: no file, no message, no way to tell a
+     failure from a no-op. That is exactly how a stale cached geometry-core.js presents —
+     buildFlatRouteMesh simply is not there — so name that case rather than dying quietly. */
+  try {
+    await exportRouteFlatInner();
+  } catch (e) {
+    console.error('[exportRouteFlat]', e);
+    setStatusKey(typeof TopoGeometry?.buildFlatRouteMesh === 'function' ? 'errFlatRoute' : 'errFlatRouteStale',
+      { msg: e && e.message || String(e) }, 'warn');
+  }
+}
+async function exportRouteFlatInner() {
+  if (!state.models.length) { setStatusKey('stFlatRouteNoModel', null, 'warn'); return; }
+  if (typeof TopoGeometry?.buildFlatRouteMesh !== 'function') throw new Error('buildFlatRouteMesh missing');
+  const thick = parseFloat($('routeFlatThick').value);
+  const path = flatRoutePath();
+  if ((path?.length || 0) < 2) { setStatusKey('stFlatRouteEmpty', null, 'warn'); return; }
+  const meshOf = m => TopoGeometry.buildFlatRouteMesh(m, thick, path);
+  if (!isSeparateRegionOutput()) {
+    const mesh = meshOf(state.models[0]);
+    if (!mesh) { setStatusKey('stFlatRouteEmpty', null, 'warn'); return; }
+    const file = exportPrefix() + '_route_flat.stl';
+    download(new Blob([pieceToBinarySTL(mesh)], { type: 'model/stl' }), file);
+    setStatusKey('stDownloaded', { file }, 'ok'); return;
+  }
+  setStatusKey('stZipping');
+  const zip = new JSZip();
+  let any = false;
+  for (const model of state.models) {
+    const mesh = meshOf(model);
+    if (!mesh) continue;                       // this region's share of the route missed its print
+    zip.folder(model.exportName).file(model.exportName + '_route_flat.stl', pieceToBinarySTL(mesh));
+    any = true;
+  }
+  if (!any) { setStatusKey('stFlatRouteEmpty', null, 'warn'); return; }
+  const file = exportPrefix() + '_route_flat.zip';
+  download(await zip.generateAsync({ type: 'blob' }), file);
+  setStatusKey('stDownloaded', { file }, 'ok');
+}
 function frameMergedMesh(F) {
   return F.text
     ? { pos: F.plate.pos.concat(F.text.pos), nrm: F.plate.nrm.concat(F.text.nrm) }
@@ -2291,6 +2371,7 @@ $('gateCancel').addEventListener('click', () => { gatePending = null; $('gate').
 
 $('exportZip').addEventListener('click', gateDownload(exportZip));
 $('exportOne').addEventListener('click', gateDownload(exportOne));
+$('exportRouteFlat').addEventListener('click', gateDownload(exportRouteFlat));
 $('exportFrame').addEventListener('click', gateDownload(() => {
   const F = state.model && state.model.frame;
   if (!F) return;

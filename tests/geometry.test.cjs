@@ -451,3 +451,74 @@ test('a partial-depth route keeps its bands adding up and buildings out of the p
         `a building reaches x=${pos[k]}, inside the route pocket`);
   }
 });
+test('the flat route part is planar top and bottom in every route mode', async () => {
+  const routePath = [[0, 0.001], [0.002, 0.001]];   // north-south down x = 90 mm
+  const T = 2;
+  let first = null;
+  /* 'off' is the point of the loop: the flat part is a separate download, so it must not
+     depend on anything the terrain stamp did — and with the mode off there is no stamp,
+     no grid.routeDist and no routeParts to lean on. */
+  for (const routeMode of ['off', 'inlay', 'through', 'emboss', 'engrave']) {
+    const model = TopoGeometry.buildGeometry(source({ samples: 40 }), options({ routeMode, routePath }));
+    const mesh = TopoGeometry.buildFlatRouteMesh(model, T);
+    assert.ok(mesh, `${routeMode} produced no flat route`);
+    const volume = await checkClosed(mesh.pos);
+    // The whole feature in one assertion: every vertex sits on one of exactly two planes.
+    const z = new Set(Array.from(mesh.pos).filter((_, k) => k % 3 === 2));
+    assert.deepEqual([...z].sort((a, b) => a - b), [0, T], `${routeMode} is not flat: ${[...z]}`);
+    // Same part in every mode, so switching modes cannot silently resize the download.
+    if (first === null) first = volume;
+    else assert.ok(Math.abs(volume - first) / first < 1e-9, `${routeMode}: ${volume} vs ${first}`);
+  }
+});
+test('flat route thickness scales the part and is clamped by the geometry', async () => {
+  const model = TopoGeometry.buildGeometry(source({ samples: 40 }),
+    options({ routeMode: 'off', routePath: [[0, 0.001], [0.002, 0.001]] }));
+  const vol = t => checkClosed(TopoGeometry.buildFlatRouteMesh(model, t).pos);
+  const [v1, v2, v4] = [await vol(1), await vol(2), await vol(4)];
+  assert.ok(Math.abs(v2 / v1 - 2) < 1e-6, `${v2} / ${v1}`);
+  assert.ok(Math.abs(v4 / v1 - 4) < 1e-6, `${v4} / ${v1}`);
+  // Clamped by the geometry, not just the slider — the page is not the only caller.
+  assert.ok(Math.abs((await vol(50)) / v1 - 10) < 1e-6);
+  assert.ok(Math.abs((await vol(0)) / v1 - 0.4) < 1e-6);
+  assert.ok(Math.abs((await vol(undefined)) / v1 - 2) < 1e-6);   // default thickness
+});
+test('the flat route follows the stamped width and the printed outline', async () => {
+  const routePath = [[0, 0.001], [0.002, 0.001]];
+  // A grid fine enough to carry the asked width: the plate is then exactly
+  // width x length x thickness, which pins the corridor to the route slider.
+  const fine = TopoGeometry.buildGeometry(source({ samples: 400 }),
+    options({ routeMode: 'off', routePath, routeWidthMM: 3.2 }));
+  assert.equal(fine.grid.routeHalf, 1.6);
+  const got = await checkClosed(TopoGeometry.buildFlatRouteMesh(fine, 2).pos);
+  const want = 3.2 * fine.modelDepth * 2;
+  assert.ok(Math.abs(got - want) / want < 1e-5, `${got} vs ${want}`);
+  // Too thin for the grid: the plate takes the width the terrain was actually stamped
+  // with, so the part still matches the route on the print.
+  const coarse = TopoGeometry.buildGeometry(source({ samples: 40 }),
+    options({ routeMode: 'off', routePath, routeWidthMM: 0.6 }));
+  assert.ok(coarse.grid.routeHalf > 0.3);
+  const thin = await checkClosed(TopoGeometry.buildFlatRouteMesh(coarse, 2).pos);
+  const thinWant = coarse.grid.routeHalf * 2 * coarse.modelDepth * 2;
+  assert.ok(Math.abs(thin - thinWant) / thinWant < 1e-5, `${thin} vs ${thinWant}`);
+  // Clipped to the print shape exactly as the stamped route is, so a plate cannot run
+  // out past the terrain it belongs to.
+  const square = await checkClosed(TopoGeometry.buildFlatRouteMesh(
+    TopoGeometry.buildGeometry(source({ samples: 60 }),
+      options({ routeMode: 'off', routePath: [[0, 0.0018], [0.002, 0.0018]] })), 2).pos);
+  for (const frameStyle of ['circle', 'hex']) {
+    const clipped = await checkClosed(TopoGeometry.buildFlatRouteMesh(
+      TopoGeometry.buildGeometry(source({ samples: 60 }),
+        options({ routeMode: 'off', routePath: [[0, 0.0018], [0.002, 0.0018]], frameStyle })), 2).pos);
+    assert.ok(clipped < square * 0.95, `${frameStyle} did not clip: ${clipped} vs ${square}`);
+  }
+});
+test('the flat route is absent rather than empty when there is no route on the print', async () => {
+  const none = TopoGeometry.buildGeometry(source(), options());
+  assert.equal(TopoGeometry.buildFlatRouteMesh(none, 2), null);
+  // A single point is not a path, and neither is a route the box does not cover.
+  const one = TopoGeometry.buildGeometry(source(), options({ routePath: [[0.001, 0.001]] }));
+  assert.equal(TopoGeometry.buildFlatRouteMesh(one, 2), null);
+  const outside = TopoGeometry.buildGeometry(source(), options({ routePath: [[0.5, 0.5], [0.6, 0.6]] }));
+  assert.equal(TopoGeometry.buildFlatRouteMesh(outside, 2), null);
+});

@@ -19,6 +19,17 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class Handler(SimpleHTTPRequestHandler):
+    # SimpleHTTPRequestHandler sends Last-Modified but no Cache-Control, and with neither
+    # Cache-Control nor Expires a browser falls back to HEURISTIC freshness: Chrome may
+    # reuse a stale copy for a while without revalidating at all. Editing a file then
+    # reloading can therefore still run the OLD app, which presents as features that are
+    # plainly in the source simply not existing on the page. "no-cache" means "store it,
+    # but revalidate every time" — the conditional request still answers 304, so the
+    # wasm is not re-downloaded on every reload; it is only ever confirmed fresh.
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-cache, must-revalidate")
+        super().end_headers()
+
     def do_POST(self):
         if self.path != "/api/lead":
             self.send_error(404)
