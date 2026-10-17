@@ -415,6 +415,7 @@ const state = {
   center: { lat: 35.3606, lon: 138.7274 }, // Mt Fuji
   areaKmX: 24, areaKmY: 24,   // independent axes; the box is a rectangle
   placeName: '',   // last searched place; names the export files, '' → "topopuzzle"
+  gpxName: '',     // imported GPX's file name; names the exports only when no place and no region
   selectedRegions: [],
   regionOutputMode: 'combined',
   regionPicking: false,
@@ -1048,6 +1049,10 @@ $('gpxFile').addEventListener('change', async e => {
     if (gpxLayer) map.removeLayer(gpxLayer);
     // an imported file replaces a drawn route rather than losing to it silently
     route.pts = []; route.line = null; route.layer.clearLayers(); setDrawing(false);
+    /* Only now that the file has parsed into points, so a rejected file never renames
+       anything. It has to be read before the handler ends: e.target.value = '' below is
+       the last moment f exists at all. */
+    state.gpxName = f.name.replace(/\.gpx$/i, '');
     gpxLayer = L.polyline(pts, { color: '#f2a65a', weight: 3, opacity: 0.9 }).addTo(map);
     const [kmX, kmY] = fitAreaToBounds(gpxLayer.getBounds());
     $('gpxClear').style.display = '';
@@ -1058,6 +1063,7 @@ $('gpxFile').addEventListener('change', async e => {
 });
 $('gpxClear').addEventListener('click', () => {
   if (gpxLayer) { map.removeLayer(gpxLayer); gpxLayer = null; }
+  state.gpxName = '';          // the name goes with the track it came from
   $('gpxClear').style.display = 'none';
   updateRouteButtons();
   setStatusKey('stGpxRemoved');
@@ -1187,6 +1193,7 @@ $('routeFit').addEventListener('click', () => {
 $('routeClear').addEventListener('click', () => {
   route.pts = []; route.line = null; route.layer.clearLayers();
   if (gpxLayer) { map.removeLayer(gpxLayer); gpxLayer = null; $('gpxClear').style.display = 'none'; }
+  state.gpxName = '';
   setDrawing(false); updateRouteButtons();
   setStatusKey('stRouteDeleted');
 });
@@ -1196,7 +1203,7 @@ $('routeSave').addEventListener('click', () => {
   const gpx = '<?xml version="1.0" encoding="UTF-8"?>' +
     '<gpx version="1.1" creator="TopoPuzzle" xmlns="http://www.topografix.com/GPX/1/1">' +
     `<trk><name>TopoPuzzle route</name><trkseg>${seg}</trkseg></trk></gpx>`;
-  const file = placeSlug() + '_route.gpx';
+  const file = exportPrefix() + '_route.gpx';
   download(new Blob([gpx], { type: 'application/gpx+xml' }), file);
   setStatusKey('stDownloaded', { file }, 'ok');
 });
@@ -2197,8 +2204,14 @@ function download(blob, name) {
 }
 
 function uniqueRegionSlug(name, index, used = new Set()) {
-  let base = String(name || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+  /* \p{M} is not optional: Thai vowel signs and tone marks are nonspacing marks, not
+     letters, so letters-and-digits alone would strip them and turn เชียงใหม่ into the
+     garbled เชยงใหม. They sit outside U+0300–U+036F, so the diacritic strip above still
+     folds café → cafe without touching them, and the class still excludes every character
+     a file name may not carry. Cut by code point so 60 cannot split a surrogate pair. */
+  let base = String(name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, '_').replace(/^_+|_+$/g, '');
+  base = Array.from(base).slice(0, 60).join('').replace(/_+$/, '');
   if (!base) base = `region_${String(index + 1).padStart(2, '0')}`;
   let slug = base, n = 2;
   while (used.has(slug)) slug = `${base}_${n++}`;
@@ -2207,9 +2220,16 @@ function uniqueRegionSlug(name, index, used = new Set()) {
 
 /* Exports are named after the searched place or the selected regions, so a
    downloads folder sorts by location instead of by export type. Several models
-   share one archive, so that case keeps a single neutral prefix. */
+   share one archive, so that case keeps a single neutral prefix.
+
+   An imported GPX names them only when nothing better exists: searching a place is a
+   more deliberate statement of where this is, and a selected region is more precise
+   still, so both outrank the file you happened to load. This is the one place the
+   default is decided — exportPrefix() and the descriptors in generate() both come
+   through here — so the fallback belongs here and nowhere else. */
 function placeSlug() {
-  return state.placeName ? uniqueRegionSlug(state.placeName, 0) : 'topopuzzle';
+  const name = state.placeName || state.gpxName;
+  return name ? uniqueRegionSlug(name, 0) : 'topopuzzle';
 }
 function exportPrefix() {
   if (state.models.length > 1)
@@ -2217,20 +2237,25 @@ function exportPrefix() {
   return state.models[0]?.exportName || placeSlug();
 }
 
+/* Every entry carries the model's own name, not just the archive around it — extract
+   two locations into one folder and bare piece_r1_c1.stl files overwrite each other,
+   which is the collision the naming scheme exists to prevent. In the single-model case
+   this name is exportPrefix(), so the whole download reads as one name. */
 function addModelStls(folder, model) {
+  const p = model.exportName + '_';
   for (const P of model.pieces) {
     if (!P.pos.length) continue;
     const col = P.id % model.nx, row = Math.floor(P.id / model.nx);
-    folder.file(`piece_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(P));
+    folder.file(`${p}piece_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(P));
   }
   for (const R of model.routeParts || []) {
-    if (R.pid === null) folder.file('route_red_continuous.stl', pieceToBinarySTL(R));
+    if (R.pid === null) folder.file(`${p}route_red_continuous.stl`, pieceToBinarySTL(R));
     else {
       const col = R.pid % model.nx, row = Math.floor(R.pid / model.nx);
-      folder.file(`route_red_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(R));
+      folder.file(`${p}route_red_r${row + 1}_c${col + 1}.stl`, pieceToBinarySTL(R));
     }
   }
-  if (model.frame) folder.file('frame_plate.stl', pieceToBinarySTL(frameMergedMesh(model.frame)));
+  if (model.frame) folder.file(`${p}frame_plate.stl`, pieceToBinarySTL(frameMergedMesh(model.frame)));
   const pocket = (model.grid?.routeFloorZ ?? 0) > 0;
   const clear = ((model.grid?.channelHalf ?? 0) - (model.grid?.routeHalf ?? 0)).toFixed(2);
   const routeNote = !model.routeParts ? ''
@@ -2239,7 +2264,7 @@ function addModelStls(folder, model) {
           { clear, floor: (model.grid.routeFloorZ ?? 0).toFixed(1) }) +
         (model.routeJoin === 'continuous' ? t('readmeContinuous') : '')
       : t(model.routeProfile === 'flat' ? 'readmeInlayFlat' : 'readmeInlay');
-  folder.file('README.txt', t('readmeHead', {
+  folder.file(`${p}README.txt`, t('readmeHead', {
     nx: model.nx, ny: model.ny, w: model.modelWidth.toFixed(1), d: model.modelDepth.toFixed(1),
   }) + routeNote + '\n' + modelSourceNotes(model));
 }
@@ -2649,7 +2674,7 @@ function topoPrintProfile(model) {
   return p;
 }
 
-async function pack3mf({ resources, items, projectObjects, filamentColors, profile }) {
+async function pack3mf({ resources, items, projectObjects, filamentColors, profile, plateName }) {
   const modelXml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
     '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" ' +
     'xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">' +
@@ -2676,7 +2701,8 @@ async function pack3mf({ resources, items, projectObjects, filamentColors, profi
   }
   settings.push('<plate>',
     '<metadata key="plater_id" value="1"/>',
-    '<metadata key="plater_name" value="TopoPuzzle"/>',
+    // the plate reads as the place it is, not as the app that made it
+    `<metadata key="plater_name" value="${xmlAttr(plateName || 'TopoPuzzle')}"/>`,
     '<metadata key="locked" value="false"/>');
   for (const obj of projectObjects) {
     settings.push('<model_instance>',
@@ -2754,7 +2780,8 @@ function buildRoute3mf(model, pitchX, pitchY) {
   }
   if (!projectObjects.length) return null;
   // the route insert has no water, so it gets the profile without ironing
-  return pack3mf({ resources: res, items, projectObjects, filamentColors: ['#E5534B'], profile: topoPrintProfile(null) });
+  return pack3mf({ resources: res, items, projectObjects, filamentColors: ['#E5534B'],
+    profile: topoPrintProfile(null), plateName: model.exportName });
 }
 
 async function buildBambuFiles(model) {
@@ -2847,7 +2874,8 @@ async function buildBambuFiles(model) {
       }
     }
 
-  const terrainBlob = await pack3mf({ resources: res, items, projectObjects, filamentColors, profile: topoPrintProfile(model) });
+  const terrainBlob = await pack3mf({ resources: res, items, projectObjects, filamentColors,
+    profile: topoPrintProfile(model), plateName: model.exportName });
   const routeBlob = await buildRoute3mf(model, pitchX, pitchY);
   if (exportController?.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
   return { terrainBlob, routeBlob };
@@ -2872,9 +2900,9 @@ async function exportBambu() {
         const model = state.models[i];
         overlay(true, t('pgRegion', { done: i + 1, total: state.models.length, place: model.regionName }));
         const files = await buildBambuFiles(model), folder = zip.folder(model.exportName);
-        folder.file('terrain.3mf', files.terrainBlob);
-        folder.file('README.txt', modelSourceNotes(model));
-        if (files.routeBlob) folder.file('route.3mf', files.routeBlob);
+        folder.file(model.exportName + '_terrain.3mf', files.terrainBlob);
+        folder.file(model.exportName + '_README.txt', modelSourceNotes(model));
+        if (files.routeBlob) folder.file(model.exportName + '_route.3mf', files.routeBlob);
       }
       const file = exportPrefix() + '_bambu.zip';
       download(await zip.generateAsync({ type: 'blob' }), file);
@@ -3050,7 +3078,7 @@ async function generate() {
     const selectionToken = state.regionOutputMode + '|' + selected.map(r => r.id).join('|');
     let descriptors;
     if (!selected.length) {
-      descriptors = [{ name: state.placeName || 'TopoPuzzle', exportName: placeSlug(),
+      descriptors = [{ name: state.placeName || state.gpxName || 'TopoPuzzle', exportName: placeSlug(),
         bounds: currentAreaBounds(), polygons: null }];
     } else if (state.regionOutputMode === 'combined') {
       descriptors = [{

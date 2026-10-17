@@ -314,10 +314,25 @@ printed outline all come from there — so Generate at least once first.
 
 Downloads take the name of the place you searched, so `Chiang Mai` yields
 `chiang_mai_chiang_mai_province_combined.stl` alongside its pieces, Bambu, frame,
-and route counterparts — `_route_flat.stl` among them. Selected regions name themselves, and an archive holding
-several regions joins theirs. Typing new coordinates clears the name and falls
-back to `topopuzzle`; dragging or resizing the box keeps it, since that refines
-the same place. A model keeps the name it was generated for until it is rebuilt.
+and route counterparts — `_route_flat.stl` and `_route.gpx` among them. Selected regions name themselves, and an archive holding
+several regions joins theirs. Typing new coordinates clears the name; dragging or
+resizing the box keeps it, since that refines the same place. A model keeps the name
+it was generated for until it is rebuilt.
+
+An imported GPX names the exports when nothing better does: load `mountain-hike.gpx`
+without searching and the files come out `mountain_hike_*`. Searching a place outranks
+it and selecting a region outranks that, since each is a more precise statement of
+where this is; clear the track and the name goes with it, back to `topopuzzle`.
+
+The name reaches inside the archives too, not just the file the browser saves —
+`topopuzzle_pieces.zip` holds `topopuzzle_piece_r1_c1.stl` and `topopuzzle_README.txt`,
+so unpacking two locations into one folder cannot have them overwrite each other. It
+also becomes the plate name a slicer shows for a Bambu export. The 3MF's own internal
+parts keep their fixed names, which the container format requires.
+
+Names are not limited to ASCII: a Thai place or file name survives into the download
+rather than collapsing to `region_01`. Latin accents still fold (`Café` → `cafe`), and
+anything a file name may not carry becomes `_`.
 
 A Bambu export that carries a route arrives as a single `_bambu.zip` holding the
 4-colour terrain and the red route part. It has to be one download: a browser grants

@@ -1,5 +1,7 @@
 const { test, expect } = require('@playwright/test');
+const path = require('path');
 const { source, options } = require('../fixtures.cjs');
+const fixtureGpx = name => path.join(__dirname, '..', '..', 'fixtures', name);
 
 async function setup(page) {
   const errors = [];
@@ -55,19 +57,28 @@ test('controls, city generation, water rebuild, language, STL ZIP and 3MF export
     const model = state.model;
     const stl = combinedBinarySTL(model), count = new DataView(stl).getUint32(80, true);
     const zip = new JSZip(); addModelStls(zip, model);
-    const readme = await zip.file('README.txt').async('string');
+    const readme = await zip.file(`${model.exportName}_README.txt`).async('string');
     const files = await buildBambuFiles(model), archive = await JSZip.loadAsync(files.terrainBlob);
     const xml = await archive.file('3D/3dmodel.model').async('string');
     const doc = new DOMParser().parseFromString(xml, 'application/xml');
     return { count, expected: model.pieces.reduce((n, p) => n + p.pos.length / 9, 0), readme,
       stls: Object.keys(zip.files).filter(n => n.endsWith('.stl')).length,
+      names: Object.keys(zip.files).sort(),
       xmlErrors: doc.querySelectorAll('parsererror').length,
       maxZ: Math.max(...[...doc.querySelectorAll('vertex')].map(v => +v.getAttribute('z'))), modelMaxZ: model.maxZ,
+      plate: (await archive.file('Metadata/model_settings.config').async('string'))
+        .match(/plater_name" value="([^"]*)"/)[1],
       profile: JSON.parse(await archive.file('Metadata/project_settings.config').async('string')) };
   });
   expect(result.count).toBe(result.expected); expect(result.stls).toBe(2);
+  // Not just the download: unpack two locations into one folder and bare piece_r1_c1.stl
+  // names would overwrite each other, which is what the naming scheme is for.
+  expect(result.names).toEqual(['topopuzzle_README.txt', 'topopuzzle_piece_r1_c1.stl',
+    'topopuzzle_piece_r1_c2.stl']);
   expect(result.readme).toContain('Buildings: 1'); expect(result.xmlErrors).toBe(0);
   expect(result.maxZ).toBeCloseTo(result.modelMaxZ, 2); expect(result.profile.top_shell_layers).toBe('6');
+  // The plate a slicer lists is the place, not the app that made the file.
+  expect(result.plate).toBe('topopuzzle');
   expect(errors).toEqual([]);
 });
 
@@ -213,6 +224,76 @@ test('exports carry the searched place name and drop it when the centre moves', 
   expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
   // The built model keeps the place it was generated for until it is replaced.
   expect(await page.evaluate(() => exportPrefix())).toBe('chiang_mai_chiang_mai_province');
+  expect(errors).toEqual([]);
+});
+
+test('an imported GPX names the exports when no place or region does', async ({ page }) => {
+  const errors = await setup(page);
+  await page.route(/nominatim\.openstreetmap\.org\/search/, route => route.fulfill({
+    json: [{ lat: '18.7883', lon: '98.9853', display_name: 'Chiang Mai, Chiang Mai Province, Thailand' }],
+  }));
+  // Nothing loaded yet, so there is nothing to name the files after.
+  expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
+
+  await page.locator('#gpxFile').setInputFiles(fixtureGpx('mountain-hike.gpx'));
+  await expect(page.locator('#status')).toContainText('GPX');
+  expect(await page.evaluate(() => placeSlug())).toBe('mountain_hike');
+
+  // Searching a place is the more deliberate statement of where this is, so it wins
+  // over the file that happens to be loaded — without discarding it.
+  await page.fill('#search', 'Chiang Mai');
+  await page.click('#searchBtn');
+  await expect(page.locator('#status')).toContainText('Found: Chiang Mai');
+  expect(await page.evaluate(() => placeSlug())).toBe('chiang_mai_chiang_mai_province');
+  // Typed coordinates drop the place, and the track that is still on the map takes over
+  // again rather than falling all the way back to the neutral name.
+  await page.evaluate(() => { $('lat').value = '10'; $('lat').dispatchEvent(new Event('change')); });
+  expect(await page.evaluate(() => placeSlug())).toBe('mountain_hike');
+
+  // The name belongs to the track: clearing one clears the other.
+  await page.click('#gpxClear');
+  expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
+  // Same for the route-wide clear, which takes the imported track with it.
+  await page.locator('#gpxFile').setInputFiles(fixtureGpx('mountain-hike.gpx'));
+  expect(await page.evaluate(() => placeSlug())).toBe('mountain_hike');
+  await page.click('#routeClear');
+  expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
+
+  // A file that never parses must not rename anything either.
+  await page.locator('#gpxFile').setInputFiles({ name: 'broken-track.gpx',
+    mimeType: 'application/gpx+xml', buffer: Buffer.from('<gpx><trk></gpx>') });
+  await expect(page.locator('#status')).toHaveClass('err');
+  expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
+  expect(errors).toEqual([]);
+});
+
+test('a Thai name survives into the file name instead of collapsing to a placeholder', async ({ page }) => {
+  const errors = await setup(page);
+  /* Thai vowel signs and tone marks are nonspacing marks rather than letters, so a slug
+     built from letters and digits alone drops them and garbles the word — and an
+     ASCII-only slug empties out entirely and falls back to region_01, which tells the
+     user nothing about which download is which. */
+  const slugs = await page.evaluate(() => ({
+    thai: uniqueRegionSlug('เชียงใหม่', 0),
+    accents: uniqueRegionSlug('Café Ridge #2', 0),
+    mixed: uniqueRegionSlug('ดอยอินทนนท์ / Doi Inthanon', 0),
+    empty: uniqueRegionSlug('!!! ???', 3),
+  }));
+  expect(slugs.thai).toBe('เชียงใหม่');
+  expect(slugs.accents).toBe('cafe_ridge_2');
+  expect(slugs.mixed).toBe('ดอยอินทนนท์_doi_inthanon');
+  // A name with nothing to keep still falls back, numbered by position as before.
+  expect(slugs.empty).toBe('region_04');
+
+  // And it survives the download itself, not just the slug: the browser is the last
+  // thing that could mangle it on the way to disk.
+  const gpx = page.waitForEvent('download');
+  await page.evaluate(() => {
+    state.placeName = 'เชียงใหม่';
+    route.pts = [[18.78, 98.98], [18.79, 98.99]];
+    $('routeSave').click();
+  });
+  expect((await gpx).suggestedFilename()).toBe('เชียงใหม่_route.gpx');
   expect(errors).toEqual([]);
 });
 
@@ -400,7 +481,7 @@ test('a route too thin for the grid still reaches the print, and says so', async
     const zip = new JSZip(); addModelStls(zip, state.model);
     return Object.keys(zip.files).filter(n => n.includes('route'));
   });
-  expect(files).toEqual(['route_red_r1_c1.stl']);
+  expect(files).toEqual(['topopuzzle_route_red_r1_c1.stl']);
   // The slider is not what was cut, so the status says which number won.
   await expect(page.locator('#status')).toHaveClass('warn');
   await expect(page.locator('#status')).toContainText('1.2 mm route');
@@ -606,7 +687,7 @@ test('real land types replace the elevation bands with mapped materials', async 
       colors: [...doc.querySelectorAll('base')].map(b => b.getAttribute('displaycolor')),
       filaments: settings.filament_colour,
       readme: await (async () => { const zip = new JSZip(); addModelStls(zip, state.model);
-        return zip.file('README.txt').async('string'); })() };
+        return zip.file(`${state.model.exportName}_README.txt`).async('string'); })() };
   });
   expect(bambu.xmlErrors).toBe(0);
   expect(bambu.materials).toEqual(['water', 'forest', 'grass', 'other']);
@@ -806,7 +887,7 @@ test('the snow line paints by altitude without going back to the network', async
   // The exported README owns up: this is an altitude someone typed, not measured snow.
   const readme = await page.evaluate(async () => {
     const zip = new JSZip(); addModelStls(zip, state.model);
-    return zip.file('README.txt').async('string');
+    return zip.file(`${state.model.exportName}_README.txt`).async('string');
   });
   expect(readme).toContain('at or above 13 m');
   expect(readme).toContain('not measured snow cover');
