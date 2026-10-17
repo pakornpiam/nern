@@ -73,12 +73,12 @@ test('controls, city generation, water rebuild, language, STL ZIP and 3MF export
   expect(result.count).toBe(result.expected); expect(result.stls).toBe(2);
   // Not just the download: unpack two locations into one folder and bare piece_r1_c1.stl
   // names would overwrite each other, which is what the naming scheme is for.
-  expect(result.names).toEqual(['topopuzzle_README.txt', 'topopuzzle_piece_r1_c1.stl',
-    'topopuzzle_piece_r1_c2.stl']);
+  expect(result.names).toEqual(['nern_README.txt', 'nern_piece_r1_c1.stl',
+    'nern_piece_r1_c2.stl']);
   expect(result.readme).toContain('Buildings: 1'); expect(result.xmlErrors).toBe(0);
   expect(result.maxZ).toBeCloseTo(result.modelMaxZ, 2); expect(result.profile.top_shell_layers).toBe('6');
   // The plate a slicer lists is the place, not the app that made the file.
-  expect(result.plate).toBe('topopuzzle');
+  expect(result.plate).toBe('nern');
   expect(errors).toEqual([]);
 });
 
@@ -221,7 +221,7 @@ test('exports carry the searched place name and drop it when the centre moves', 
   expect((await gpx).suggestedFilename()).toBe('chiang_mai_chiang_mai_province_route.gpx');
   // Typed coordinates are a move elsewhere, so the name goes stale.
   await page.evaluate(() => { $('lat').value = '10'; $('lat').dispatchEvent(new Event('change')); });
-  expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
+  expect(await page.evaluate(() => placeSlug())).toBe('nern');
   // The built model keeps the place it was generated for until it is replaced.
   expect(await page.evaluate(() => exportPrefix())).toBe('chiang_mai_chiang_mai_province');
   expect(errors).toEqual([]);
@@ -233,7 +233,7 @@ test('an imported GPX names the exports when no place or region does', async ({ 
     json: [{ lat: '18.7883', lon: '98.9853', display_name: 'Chiang Mai, Chiang Mai Province, Thailand' }],
   }));
   // Nothing loaded yet, so there is nothing to name the files after.
-  expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
+  expect(await page.evaluate(() => placeSlug())).toBe('nern');
 
   await page.locator('#gpxFile').setInputFiles(fixtureGpx('mountain-hike.gpx'));
   await expect(page.locator('#status')).toContainText('GPX');
@@ -252,18 +252,18 @@ test('an imported GPX names the exports when no place or region does', async ({ 
 
   // The name belongs to the track: clearing one clears the other.
   await page.click('#gpxClear');
-  expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
+  expect(await page.evaluate(() => placeSlug())).toBe('nern');
   // Same for the route-wide clear, which takes the imported track with it.
   await page.locator('#gpxFile').setInputFiles(fixtureGpx('mountain-hike.gpx'));
   expect(await page.evaluate(() => placeSlug())).toBe('mountain_hike');
   await page.click('#routeClear');
-  expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
+  expect(await page.evaluate(() => placeSlug())).toBe('nern');
 
   // A file that never parses must not rename anything either.
   await page.locator('#gpxFile').setInputFiles({ name: 'broken-track.gpx',
     mimeType: 'application/gpx+xml', buffer: Buffer.from('<gpx><trk></gpx>') });
   await expect(page.locator('#status')).toHaveClass('err');
-  expect(await page.evaluate(() => placeSlug())).toBe('topopuzzle');
+  expect(await page.evaluate(() => placeSlug())).toBe('nern');
   expect(errors).toEqual([]);
 });
 
@@ -481,7 +481,7 @@ test('a route too thin for the grid still reaches the print, and says so', async
     const zip = new JSZip(); addModelStls(zip, state.model);
     return Object.keys(zip.files).filter(n => n.includes('route'));
   });
-  expect(files).toEqual(['topopuzzle_route_red_r1_c1.stl']);
+  expect(files).toEqual(['nern_route_red_r1_c1.stl']);
   // The slider is not what was cut, so the status says which number won.
   await expect(page.locator('#status')).toHaveClass('warn');
   await expect(page.locator('#status')).toContainText('1.2 mm route');
@@ -511,8 +511,8 @@ test('the Bambu export delivers terrain and route in a single download', async (
 
   await page.click('#exportBambu');
   await expect(page.locator('#generate')).toBeEnabled({ timeout: 30000 });
-  await expect(page.locator('#status')).toContainText('topopuzzle_bambu.zip');
-  expect(downloads.map(d => d.suggestedFilename())).toEqual(['topopuzzle_bambu.zip']);
+  await expect(page.locator('#status')).toContainText('nern_bambu.zip');
+  expect(downloads.map(d => d.suggestedFilename())).toEqual(['nern_bambu.zip']);
   const [download] = downloads;
 
   // Both parts are really in the archive the browser received. Zip stores entry names
@@ -520,8 +520,8 @@ test('the Bambu export delivers terrain and route in a single download', async (
   const bytes = require('fs').readFileSync(await download.path());
   expect(bytes.subarray(0, 2).toString('latin1')).toBe('PK');
   const text = bytes.toString('latin1');
-  expect(text).toContain('topopuzzle_bambu_4color.3mf');
-  expect(text).toContain('topopuzzle_bambu_route.3mf');
+  expect(text).toContain('nern_bambu_4color.3mf');
+  expect(text).toContain('nern_bambu_route.3mf');
   expect(errors).toEqual([]);
 });
 
@@ -1109,7 +1109,7 @@ test('the flat route downloads on its own, in any mode, and is gated on the mode
   await expect(page.locator('#exportRouteFlat')).toBeEnabled();
   const early = page.waitForEvent('download');
   await page.evaluate(() => exportRouteFlat());
-  expect((await early).suggestedFilename()).toBe('topopuzzle_route_flat.stl');
+  expect((await early).suggestedFilename()).toBe('nern_route_flat.stl');
   // Clearing it disarms the button again rather than leaving a dead control.
   await page.evaluate(() => { route.pts = []; redrawRoute(); updateRouteButtons(); });
   await expect(page.locator('#exportRouteFlat')).toBeDisabled();
@@ -1131,7 +1131,7 @@ test('the flat route downloads on its own, in any mode, and is gated on the mode
   // Exercise the download handler directly without submitting a test lead.
   const stl = page.waitForEvent('download');
   await page.evaluate(() => exportRouteFlat());
-  expect((await stl).suggestedFilename()).toBe('topopuzzle_route_flat.stl');
+  expect((await stl).suggestedFilename()).toBe('nern_route_flat.stl');
 
   // The slider really reached the part: both faces sit on the planes it names.
   const z = await page.evaluate(() => {
@@ -1197,5 +1197,5 @@ test('a flat route export that cannot run says so instead of failing silently', 
   await page.evaluate(() => { TopoGeometry.buildFlatRouteMesh = window.__real; });
   const dl = page.waitForEvent('download');
   await page.evaluate(() => exportRouteFlat());
-  expect((await dl).suggestedFilename()).toBe('topopuzzle_route_flat.stl');
+  expect((await dl).suggestedFilename()).toBe('nern_route_flat.stl');
 });

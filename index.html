@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>TopoPuzzle — 3D-Printable Topographic Puzzles of Anywhere on Earth</title>
+<title>Nern — 3D-Printable Topographic Puzzles of Anywhere on Earth</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -26,7 +26,7 @@
   <aside id="sidebar">
     <div class="brand">
       <div class="logo">△</div>
-      <h1>TopoPuzzle</h1>
+      <h1 data-i18n="appName">Nern</h1>
       <div class="lang-tabs" id="langTabs">
         <button id="langEn" class="active" lang="en">EN</button>
         <button id="langTh" lang="th">ไทย</button>
@@ -386,7 +386,7 @@
       <button id="gateGo" class="primary" data-i18n="gateGo">Download</button>
       <button id="gateCancel" data-i18n="gateCancel">Cancel</button>
     </div>
-    <p class="hint" style="margin-top:10px" data-i18n="gateHint">We only use this to share TopoPuzzle updates. No spam, ever.</p>
+    <p class="hint" style="margin-top:10px" data-i18n="gateHint">We only use this to share Nern updates. No spam, ever.</p>
     <div class="gate-links">
       <a id="gateBmc" href="#" target="_blank" rel="noopener" data-i18n="gateBmc">☕ Buy me a coffee</a>
       <a id="gateAd" href="#" target="_blank" rel="noopener" data-i18n="gateAd">Our sponsor ↗</a>
@@ -397,7 +397,7 @@
 <script>
 "use strict";
 /* ============================================================================
-   TopoPuzzle — browser application
+   Nern — browser application
    Pipeline: select area → fetch elevation and OSM buildings → build terrain
    and fused city pieces in a worker → preview (Three.js) → STL / Bambu 3MF.
    ============================================================================ */
@@ -414,7 +414,7 @@ function cancelActiveWork() {
 const state = {
   center: { lat: 35.3606, lon: 138.7274 }, // Mt Fuji
   areaKmX: 24, areaKmY: 24,   // independent axes; the box is a rectangle
-  placeName: '',   // last searched place; names the export files, '' → "topopuzzle"
+  placeName: '',   // last searched place; names the export files, '' → "nern"
   gpxName: '',     // imported GPX's file name; names the exports only when no place and no region
   selectedRegions: [],
   regionOutputMode: 'combined',
@@ -1201,8 +1201,8 @@ $('routeSave').addEventListener('click', () => {
   const pts = currentRoutePts() || [];
   const seg = pts.map(p => `<trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"/>`).join('');
   const gpx = '<?xml version="1.0" encoding="UTF-8"?>' +
-    '<gpx version="1.1" creator="TopoPuzzle" xmlns="http://www.topografix.com/GPX/1/1">' +
-    `<trk><name>TopoPuzzle route</name><trkseg>${seg}</trkseg></trk></gpx>`;
+    '<gpx version="1.1" creator="Nern" xmlns="http://www.topografix.com/GPX/1/1">' +
+    `<trk><name>Nern route</name><trkseg>${seg}</trkseg></trk></gpx>`;
   const file = exportPrefix() + '_route.gpx';
   download(new Blob([gpx], { type: 'application/gpx+xml' }), file);
   setStatusKey('stDownloaded', { file }, 'ok');
@@ -2229,7 +2229,7 @@ function uniqueRegionSlug(name, index, used = new Set()) {
    through here — so the fallback belongs here and nowhere else. */
 function placeSlug() {
   const name = state.placeName || state.gpxName;
-  return name ? uniqueRegionSlug(name, 0) : 'topopuzzle';
+  return name ? uniqueRegionSlug(name, 0) : 'nern';
 }
 function exportPrefix() {
   if (state.models.length > 1)
@@ -2702,7 +2702,7 @@ async function pack3mf({ resources, items, projectObjects, filamentColors, profi
   settings.push('<plate>',
     '<metadata key="plater_id" value="1"/>',
     // the plate reads as the place it is, not as the app that made it
-    `<metadata key="plater_name" value="${xmlAttr(plateName || 'TopoPuzzle')}"/>`,
+    `<metadata key="plater_name" value="${xmlAttr(plateName || 'Nern')}"/>`,
     '<metadata key="locked" value="false"/>');
   for (const obj of projectObjects) {
     settings.push('<model_instance>',
@@ -3078,7 +3078,7 @@ async function generate() {
     const selectionToken = state.regionOutputMode + '|' + selected.map(r => r.id).join('|');
     let descriptors;
     if (!selected.length) {
-      descriptors = [{ name: state.placeName || state.gpxName || 'TopoPuzzle', exportName: placeSlug(),
+      descriptors = [{ name: state.placeName || state.gpxName || 'Nern', exportName: placeSlug(),
         bounds: currentAreaBounds(), polygons: null }];
     } else if (state.regionOutputMode === 'combined') {
       descriptors = [{

@@ -1,4 +1,4 @@
-/* TopoPuzzle interface translations.
+/* Nern interface translations.
  *
  * Loaded before the app's inline script so the dictionary exists by the time
  * anything paints. Two flat key -> string maps; Thai falls back to English for
@@ -40,7 +40,8 @@
     errLandcoverLimit: 'This area has too much land-type geometry (40,000 features or 800,000 vertices). Select a smaller area or use elevation bands.',
     readmeLandcover: 'Land types: © OpenStreetMap contributors, ODbL (https://www.openstreetmap.org/copyright). Forest and grass/farmland are mapped areas, not satellite colors. Other ground includes unmapped areas and buildings. Colors occupy the upper 0.8 mm vertically, preserving at least 1 mm of base; low areas can have a thinner color layer. Boundaries follow terrain cells and may omit sub-cell features. Water uses the enabled water mask. Snow is OpenStreetMap permanent ice — glaciers and permanent snowfields, never seasonal cover — plus an optional snow line, an altitude chosen in the app. Terrain materials are emitted only for the categories present, in precedence order: water, snow, forest, grass, other. Routes and optional frames retain separate materials.',
     /* ---- document + brand ---- */
-    pageTitle: 'TopoPuzzle — 3D-Printable Topographic Puzzles of Anywhere on Earth',
+    appName: 'Nern',
+    pageTitle: 'Nern — 3D-Printable Topographic Puzzles of Anywhere on Earth',
     tagline: 'Turn any place on Earth into an interlocking, 3D-printable topographic puzzle. Pick a spot, generate the terrain, export STL pieces.',
 
     /* ---- 1 · Location ---- */
@@ -192,7 +193,7 @@
     gateEmailPlaceholder: 'you@example.com',
     gateGo: 'Download',
     gateCancel: 'Cancel',
-    gateHint: 'We only use this to share TopoPuzzle updates. No spam, ever.',
+    gateHint: 'We only use this to share Nern updates. No spam, ever.',
     gateBmc: '☕ Buy me a coffee',
     gateAd: 'Our sponsor ↗',
     gateErrName: 'Please enter your name.',
@@ -266,7 +267,7 @@
     /* ---- README.txt inside the exported zip ----
        Hard-wrapped by hand; keep lines under ~78 characters. */
     readmeHead:
-      'TopoPuzzle export\nPieces: {nx} x {ny}\nModel size: {w} x {d} mm\n' +
+      'Nern export\nPieces: {nx} x {ny}\nModel size: {w} x {d} mm\n' +
       'Print all pieces, then assemble the jigsaw. Tabs interlock by design.\n',
     readmeThrough:
       'The route_red_*.stl parts run the full depth of the print. Print them in red\n' +
@@ -319,7 +320,8 @@
     errLandcoverArea: 'โหมดประเภทพื้นที่จริงรองรับสูงสุด 15,000 ตร.กม. ต่อโมเดล เลือกพื้นที่เล็กลงหรือใช้แถบตามระดับความสูง',
     errLandcoverLimit: 'พื้นที่นี้มีข้อมูลมากเกินไป (40,000 รูปทรง หรือ 800,000 จุด) เลือกพื้นที่เล็กลงหรือใช้แถบตามระดับความสูง',
     readmeLandcover: 'ประเภทพื้นที่: © OpenStreetMap contributors, ODbL (https://www.openstreetmap.org/copyright) ป่าและทุ่งหญ้า/พื้นที่เกษตรอ้างอิงแผนที่ ไม่ใช่สีภาพดาวเทียม พื้นที่อื่นรวมพื้นที่ที่ไม่มีข้อมูลและอาคาร สีอยู่บนผิวหนา 0.8 มม. ในแนวดิ่ง โดยเหลือฐานอย่างน้อย 1 มม. พื้นที่ต่ำอาจมีชั้นสีบางกว่า ขอบเขตอิงช่องภูมิประเทศและอาจไม่แสดงส่วนที่เล็กกว่าช่อง น้ำใช้ข้อมูลน้ำเมื่อเปิดใช้งาน หิมะคือน้ำแข็งถาวรจาก OpenStreetMap ได้แก่ธารน้ำแข็งและลานหิมะถาวร ไม่ใช่หิมะตามฤดูกาล ร่วมกับแนวหิมะตามระดับความสูงที่เลือกในแอป วัสดุภูมิประเทศจะสร้างเฉพาะประเภทที่มีอยู่จริง เรียงตามลำดับความสำคัญคือน้ำ หิมะ ป่า ทุ่งหญ้า และพื้นที่อื่น เส้นทางและกรอบยังใช้วัสดุแยกตามเดิม',
-    pageTitle: 'TopoPuzzle — จิ๊กซอว์ภูมิประเทศ 3 มิติ พิมพ์ได้จากทุกที่บนโลก',
+    appName: 'เนิน',
+    pageTitle: 'เนิน — จิ๊กซอว์ภูมิประเทศ 3 มิติ พิมพ์ได้จากทุกที่บนโลก',
     tagline: 'เปลี่ยนสถานที่ใดก็ได้บนโลกให้เป็นจิ๊กซอว์ภูมิประเทศแบบต่อประกบ พิมพ์ 3 มิติได้ เลือกจุดที่ต้องการ สร้างภูมิประเทศ แล้วส่งออกเป็นชิ้นส่วน STL',
 
     g1Title: '1 · ตำแหน่ง',
@@ -464,7 +466,7 @@
     gateEmailPlaceholder: 'you@example.com',
     gateGo: 'ดาวน์โหลด',
     gateCancel: 'ยกเลิก',
-    gateHint: 'เราใช้ข้อมูลนี้เพื่อส่งข่าวอัปเดตของ TopoPuzzle เท่านั้น ไม่มีสแปมแน่นอน',
+    gateHint: 'เราใช้ข้อมูลนี้เพื่อส่งข่าวอัปเดตของเนินเท่านั้น ไม่มีสแปมแน่นอน',
     gateBmc: '☕ เลี้ยงกาแฟผู้พัฒนา',
     gateAd: 'ผู้สนับสนุนของเรา ↗',
     gateErrName: 'กรุณากรอกชื่อของคุณ',
@@ -534,7 +536,7 @@
     /* Thai has no word spaces, so these get their own line breaks rather than
        reusing the English wrapping. */
     readmeHead:
-      'TopoPuzzle export\nชิ้นส่วน: {nx} x {ny}\nขนาดโมเดล: {w} x {d} มม.\n' +
+      'ไฟล์ส่งออกจากเนิน\nชิ้นส่วน: {nx} x {ny}\nขนาดโมเดล: {w} x {d} มม.\n' +
       'พิมพ์ทุกชิ้นแล้วนำมาต่อกันเป็นจิ๊กซอว์ เดือยล็อกเข้ากันพอดีตามที่ออกแบบไว้\n',
     readmeThrough:
       'ไฟล์ route_red_*.stl เป็นชิ้นเส้นทางที่ทะลุตลอดความหนาของชิ้นงาน\n' +

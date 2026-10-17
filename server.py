@@ -1,4 +1,4 @@
-"""TopoPuzzle dev server: static files + lead capture.
+"""Nern dev server: static files + lead capture.
 
 Serves the app like `python -m http.server 5177` and additionally accepts
 POST /api/lead with JSON {"name": ..., "email": ...}, appending each
@@ -58,5 +58,5 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"TopoPuzzle server on http://localhost:{PORT} (leads -> {LEADS.name})")
+    print(f"Nern server on http://localhost:{PORT} (leads -> {LEADS.name})")
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()

@@ -1,4 +1,4 @@
-# TopoPuzzle
+# Nern
 
 Generate printable terrain puzzles and neighborhood models in your browser.
 
@@ -322,10 +322,10 @@ it was generated for until it is rebuilt.
 An imported GPX names the exports when nothing better does: load `mountain-hike.gpx`
 without searching and the files come out `mountain_hike_*`. Searching a place outranks
 it and selecting a region outranks that, since each is a more precise statement of
-where this is; clear the track and the name goes with it, back to `topopuzzle`.
+where this is; clear the track and the name goes with it, back to `nern`.
 
 The name reaches inside the archives too, not just the file the browser saves —
-`topopuzzle_pieces.zip` holds `topopuzzle_piece_r1_c1.stl` and `topopuzzle_README.txt`,
+`nern_pieces.zip` holds `nern_piece_r1_c1.stl` and `nern_README.txt`,
 so unpacking two locations into one folder cannot have them overwrite each other. It
 also becomes the plate name a slicer shows for a Bambu export. The 3MF's own internal
 parts keep their fixed names, which the container format requires.

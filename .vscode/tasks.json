@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "TopoPuzzle: Run App",
+      "label": "Nern: Run App",
       "type": "process",
       "command": "python",
       "args": [
@@ -25,7 +25,7 @@
       "runOptions": {
         "instanceLimit": 1
       },
-      "detail": "Start TopoPuzzle at http://localhost:5177"
+      "detail": "Start Nern at http://localhost:5177"
     }
   ]
 }

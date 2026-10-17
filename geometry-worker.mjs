@@ -22,7 +22,7 @@ self.onmessage = async ({ data }) => {
        the real error and stack here first: a worker's console reaches DevTools like any
        other, so a bug report can name the cause instead of the catch-all. */
     const known = ['errCityGeometry', 'errLandcoverFetch'].includes(e.message);
-    if (!known) console.error('[topopuzzle worker]', action, e && e.stack || e);
+    if (!known) console.error('[nern worker]', action, e && e.stack || e);
     self.postMessage({ error: known ? e.message : 'errGeometryWorker' });
   }
 };
